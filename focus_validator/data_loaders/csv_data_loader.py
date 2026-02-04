@@ -15,16 +15,12 @@ class CSVDataLoader:
         # Track failed columns for reporting
         self.failed_columns = set()
 
-        # RATIONALE FOR REMOVED common_string_columns (FOCUS 1.3):
-        # We no longer force core FOCUS columns to Utf8 (string) because:
-        # 1. LOGICAL INVARIANTS: FOCUS 1.3 requires mathematical validation (e.g., Price * Qty = Cost).
-        #    These operations require native numeric types (Float64).
-        #
-        # 2. VALIDATOR CASTING: The scientific notation issues that previously forced string 
-        #    loading are now handled in the validator's SQL layer via DECIMAL(38,12) casting.
-        #
-        # 3. INFERENCE STABILITY: Explicitly typing as Float64 prevents Polars from 
-        #    crashing when it encounters mixed integer/decimal data in large CSVs.
+        # EXPLICIT FOCUS SCHEMATIC TYPES (FOCUS 1.3 PascalCase)
+        # This is a strict validation engine. We maintain explicit lists of column
+        # types to ensure that data is loaded with the precise representation 
+        # required for both format validation and logical invariants.
+        
+        # 1. FOCUS Numeric Columns (Loaded as Float64 to support calculations)
         self.focus_numeric_columns = {
             "BilledCost",
             "BilledUnitPrice",
@@ -35,6 +31,63 @@ class CSVDataLoader:
             "ListCost",
             "ListUnitPrice",
             "PricingQuantity",
+            "CommitmentDiscountQuantity",
+            "PricingCurrencyContractedUnitPrice",
+            "PricingCurrencyEffectiveCost",
+            "PricingCurrencyListUnitPrice",
+            "AllocatedRatio"
+        }
+
+        # 2. FOCUS String Columns (Loaded as Utf8 for strict format/regex validation)
+        self.focus_string_columns = {
+            "AccountId",
+            "AccountName",
+            "AvailabilityZone",
+            "BillingAccountId",
+            "BillingAccountName",
+            "BillingCurrency",
+            "ChargeCategory",
+            "ChargeClass",
+            "ChargeDescription",
+            "ChargeFrequency",
+            "ChargeType",
+            "CommitmentDiscountCategory",
+            "CommitmentDiscountId",
+            "CommitmentDiscountName",
+            "CommitmentDiscountStatus",
+            "CommitmentDiscountType",
+            "ConsumedService",
+            "ConsumedUnit",
+            "InvoiceIssuerName",
+            "PricingCategory",
+            "PricingUnit",
+            "ProviderName",
+            "PublisherName",
+            "RegionId",
+            "RegionName",
+            "ResourceId",
+            "ResourceName",
+            "ResourceType",
+            "ServiceCategory",
+            "ServiceName",
+            "SkuId",
+            "SkuPriceId",
+            "SubAccountId",
+            "SubAccountName",
+            "Tags",
+            "InvoiceId",
+            "SkuMeter",
+            "SubAccountType",
+            "BillingAccountType",
+            "AllocatedMethodDetails",
+            "AllocatedMethodId",
+            "AllocatedResourceId",
+            "AllocatedResourceName",
+            "CapacityReservationId",
+            "CapacityReservationStatus",
+            "ServiceSubcategory",
+            "HostProviderName",
+            "ServiceProviderName"
         }
 
     def _convert_pandas_to_polars_dtypes(
@@ -56,6 +109,13 @@ class CSVDataLoader:
             if col in self.focus_numeric_columns:
                 self.log.debug(f"Forcing numeric column {col} to Float64")
                 polars_dtypes[col] = pl.Float64()
+                continue
+            
+            # Use Utf8 for FOCUS string columns to ensure strict format 
+            # and regex validation.
+            if col in self.focus_string_columns:
+                self.log.debug(f"Forcing string column {col} to Utf8")
+                polars_dtypes[col] = pl.Utf8()
                 continue
 
             # Handle Polars types directly
@@ -491,9 +551,13 @@ class CSVDataLoader:
         self.failed_columns = set()
 
         if not self.column_types:
-            # Standard FOCUS core columns that frequently trigger inference errors 
-            # if not explicitly typed.
-            self.column_types = {col: pl.Float64() for col in self.focus_numeric_columns}
+            # Initialize with explicit FOCUS schematic types to ensure
+            # consistent loading and validation.
+            self.column_types = {}
+            for col in self.focus_numeric_columns:
+                self.column_types[col] = pl.Float64()
+            for col in self.focus_string_columns:
+                self.column_types[col] = pl.Utf8()
 
         # Determine parse_dates list from column_types
         parse_dates_list = self._get_parse_dates_list()
