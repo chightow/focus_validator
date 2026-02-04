@@ -711,9 +711,10 @@ class FormatBillingCurrencyCodeGenerator(DuckDBCheckGenerator):
         msg_sql = message.replace("'", "''")
 
         # Get valid currency codes from CSV file
-        valid_codes = get_currency_codes(
-            code_file="focus_validator/rules/currency_codes.csv"
-        )
+        import os
+        base_dir = os.path.dirname(os.path.dirname(__file__))
+        code_file = os.path.join(base_dir, "rules", "currency_codes.csv")
+        valid_codes = get_currency_codes(code_file=code_file)
         # Create SQL IN clause with properly quoted currency codes
         codes_list = "', '".join(sorted(valid_codes))
 
