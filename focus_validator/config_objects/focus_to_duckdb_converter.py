@@ -587,8 +587,7 @@ class FormatNumericGenerator(DuckDBCheckGenerator):
         msg_sql = message.replace("'", "''")
 
         # Requirement SQL (finds violations)
-        # Updated regex to support scientific notation (e.g. 1.2e-5)
-        condition = f"{col} IS NOT NULL AND NOT (TRIM({col}::TEXT) ~ '^[+-]?([0-9]*[.])?[0-9]+([eE][+-]?[0-9]+)?$')"
+        condition = f"{col} IS NOT NULL AND NOT (TRIM({col}::TEXT) ~ '^[+-]?([0-9]*[.])?[0-9]+$')"
         condition = self._apply_condition(condition)
 
         requirement_sql = f"""
