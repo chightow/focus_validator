@@ -1140,6 +1140,12 @@ class CheckIsContainedInGenerator(DuckDBCheckGenerator):
         # Predicate SQL (for condition mode)
         predicate_sql = f"{col} IS NOT NULL AND {col} IN ({val_list})"
 
+        # RATIONALE FOR SQLQuery (FOCUS 1.3 Architecture):
+        # We return a structured SQLQuery rather than a raw string to support:
+        # 1. DUAL-MODE VALIDATION: Separating the 'Requirement' (what fails) from the 
+        #    'Predicate' (which rows the rule applies to).
+        # 2. TRANSPILATION: Enabling SQLGlot to convert DuckDB-native logic into 
+        #    other dialects (Snowflake, BigQuery) for cross-provider validation.
         return SQLQuery(requirement_sql=requirement_sql.strip(), predicate_sql=predicate_sql)
 
     def getCheckType(self) -> str:
@@ -1484,7 +1490,12 @@ class ColumnByColumnEqualsColumnValueGenerator(DuckDBCheckGenerator):
         return "column_by_column_equals_column_value"
 
     def generatePredicate(self) -> str | None:
-        """Backward compatibility wrapper"""
+        """
+        RATIONALE FOR PREDICATE OVERRIDE (FOCUS 1.3):
+        Explicitly override generatePredicate to ensure that when this mathematical 
+        rule is used as a condition for other rules, it uses the same rounding 
+        logic (decimal precision) as the main validation check.
+        """
         if getattr(self, "exec_mode", "requirement") != "condition":
             return None
         sql_query = self.generateSql()
