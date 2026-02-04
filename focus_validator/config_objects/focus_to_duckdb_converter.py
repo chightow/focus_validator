@@ -2222,10 +2222,16 @@ class FocusToDuckDBSchemaConverter:
             "factory": lambda args: "ColumnName",
         },
         "CheckIsContainedIn": {
+            # RATIONALE (FOCUS 1.3 - Standardized Vocabularies):
+            # Maps the YAML 'CheckIsContainedIn' check to the generator that 
+            # enforces Allowed Value lists (Enums) for standardized columns.
             "generator": CheckIsContainedInGenerator,
             "factory": lambda args: "ColumnName",
         },
         "CheckColumnComparison": {
+            # RATIONALE (FOCUS 1.3 - Relational Integrity):
+            # Maps the YAML 'CheckColumnComparison' check to the generator that 
+            # validates logical relationships between two columns (e.g., A >= B).
             "generator": CheckColumnComparisonGenerator,
             "factory": lambda args: "ColumnName",
         },
