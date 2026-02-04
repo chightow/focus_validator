@@ -1,0 +1,2215 @@
+{
+  "Details": {
+    "ModelVersion": "1.3",
+    "FOCUSVersion": "1.3"
+  },
+  "ApplicabilityCriteria": {
+    "ACCOUNT_NAMING_SUPPORTED": {
+      "Description": "Provider supports assigning a display name for the billing account"
+    },
+    "AVAILABILITY_ZONE_SUPPORTED": {
+      "Description": "Provider supports deploying resources or services within an availability zone"
+    },
+    "CAPACITY_RESERVATION_SUPPORTED": {
+      "Description": "Provider supports capacity reservations"
+    },
+    "COMMITMENT_DISCOUNT_SUPPORTED": {
+      "Description": "Provider supports commitment discounts"
+    },
+    "MULTIPLE_PRICING_CATEGORIES_SUPPORTED": {
+      "Description": "Provider supports more than one pricing category across all SKUs"
+    },
+    "MULTIPLE_SUB_ACCOUNT_TYPES_SUPPORTED": {
+      "Description": "Provider supports more than one possible SubAccountType value"
+    },
+    "MULTIPLE_BILLING_ACCOUNT_TYPES_SUPPORTED": {
+      "Description": "Provider supports more than one possible BillingAccountType value"
+    },
+    "NEGOTIATED_PRICING_SUPPORTED": {
+      "Description": "Provider supports negotiated pricing concepts"
+    },
+    "PUBLIC_PRICE_LIST_SUPPORTED": {
+      "Description": "Provider publishes public price lists"
+    },
+    "USAGE_MEASUREMENT_SUPPORTED": {
+      "Description": "Provider supports the measurement of usage"
+    },
+    "UNIT_PRICING_SUPPORTED": {
+      "Description": "Provider supports unit pricing concepts"
+    },
+    "SUB_ACCOUNT_SUPPORTED": {
+      "Description": "Provider supports a sub account construct"
+    },
+    "BILLING_BASED_ON_PROVISIONED_RESOURCES_SUPPORTED": {
+      "Description": "Provider supports billing based on provisioned resources"
+    },
+    "RESOURCE_TYPE_ASSIGNMENT_SUPPORTED": {
+      "Description": "Provider supports assigning types to resources"
+    },
+    "PRICING_BILLING_CURRENCY_DIFFERENCES_SUPPORTED": {
+      "Description": "Provider supports pricing and billing in different currencies"
+    },
+    "VIRTUAL_CURRENCY_SUPPORTED": {
+      "Description": "Provider supports prices in virtual currency"
+    },
+    "REGION_SUPPORTED": {
+      "Description": "Provider supports deploying resources or services within a region"
+    },
+    "TAGGING_SUPPORTED": {
+      "Description": "Provider supports setting user or provider-defined tags"
+    }
+  },
+  "CheckFunctions": {
+    "OR": {
+      "Description": "OR check items, will return true on ANY check passing",
+      "Arguments": [
+        "Items"
+      ],
+      "FormatAttributes": []
+    },
+    "AND": {
+      "Description": "AND check items, will return true on ALL checks passing",
+      "Arguments": [
+        "Items"
+      ],
+      "FormatAttributes": []
+    },
+    "ColumnPresent": {
+      "Description": "Check if column is present in the dataset",
+      "Arguments": [
+        "ColumnName"
+      ],
+      "FormatAttributes": [
+        "ColumnHandling-A-000-M"
+      ]
+    },
+    "CheckDistinctCount": {
+      "Description": "Check if two columns have a distinct count equal to a value",
+      "Arguments": [
+        "ColumnAName",
+        "ColumnBName",
+        "ExpectedCount"
+      ],
+      "FormatAttributes": []
+    },
+    "FormatKeyValue": {
+      "Description": "Check a column has a key value format",
+      "Arguments": [
+        "ColumnName"
+      ],
+      "FormatAttributes": [
+        "KeyValueFormat-A-000-M"
+      ]
+    },
+    "CheckValue": {
+      "Description": "Check if column has a particular value",
+      "Arguments": [
+        "ColumnName",
+        "Value"
+      ],
+      "FormatAttributes": []
+    },
+    "CheckNotValue": {
+      "Description": "Check if column does not have a particular value",
+      "Arguments": [
+        "ColumnName",
+        "Value"
+      ],
+      "FormatAttributes": []
+    },
+    "CheckNotSameValue": {
+      "Description": "Check if column does not have the same value as another column",
+      "Arguments": [
+        "ColumnAName",
+        "ColumnBName"
+      ],
+      "FormatAttributes": []
+    },
+    "CheckSameValue": {
+      "Description": "Check if column does have the same value as another column",
+      "Arguments": [
+        "ColumnAName",
+        "ColumnBName"
+      ],
+      "FormatAttributes": []
+    },
+    "CheckDecimalValue": {
+      "Description": "Check if column has a valid decimal value",
+      "Arguments": [
+        "ColumnName"
+      ],
+      "FormatAttributes": []
+    },
+    "CheckGreaterOrEqualThanValue": {
+      "Description": "Check if column has value equal or greater than a value",
+      "Arguments": [
+        "ColumnName",
+        "Value"
+      ],
+      "FormatAttributes": []
+    },
+    "CheckModelRule": {
+      "Description": "Check another ModelRule and turn its value",
+      "Arguments": [
+        "ModelRuleId"
+      ],
+      "FormatAttributes": []
+    },
+    "CheckNationalCurrency": {
+      "Description": "Check column has a valid national currency code",
+      "Arguments": [
+        "ColumnName"
+      ],
+      "FormatAttributes": [
+        "CurrencyFormat-A-000-C"
+      ]
+    },
+    "TypeDecimal": {
+      "Description": "Check column has the data type of decimal",
+      "Arguments": [
+        "ColumnName"
+      ],
+      "FormatAttributes": []
+    },
+    "TypeString": {
+      "Description": "Check column has the data type of string",
+      "Arguments": [
+        "ColumnName"
+      ],
+      "FormatAttributes": []
+    },
+    "FormatDateTime": {
+      "Description": "Check column has the format of datetime",
+      "Arguments": [
+        "ColumnName"
+      ],
+      "FormatAttributes": [
+        "DateTimeFormat-A-000-M"
+      ]
+    },
+    "FormatNumeric": {
+      "Description": "Check a column has a numeric format",
+      "Arguments": [
+        "ColumnName"
+      ],
+      "FormatAttributes": [
+        "NumericFormat-A-000-M"
+      ]
+    },
+    "FormatString": {
+      "Description": "Check a column has a string format",
+      "Arguments": [
+        "ColumnName"
+      ],
+      "FormatAttributes": [
+        "StringHandling-A-000-M"
+      ]
+    },
+    "FormatUnit": {
+      "Description": "Check a column has a unit format",
+      "Arguments": [
+        "ColumnName"
+      ],
+      "FormatAttributes": [
+        "UnitFormat-A-000-M"
+      ]
+    },
+    "FormatCurrency": {
+      "Description": "Check a column has a currency format",
+      "Arguments": [
+        "ColumnName"
+      ],
+      "FormatAttributes": [
+        "CurrencyFormat-A-000-C"
+      ]
+    },
+    "ColumnByColumnEqualsColumnValue": {
+      "Description": "Check the result of a column value times by another column value and confirm if it matches the value of third column",
+      "Arguments": [
+        "ColumnAName",
+        "ColumnBName",
+        "ResultColumnName"
+      ],
+      "FormatAttributes": []
+    },
+    "TypeDateTime": {
+      "Description": "Check column has the data type of datetime",
+      "Arguments": [
+        "ColumnName"
+      ],
+      "FormatAttributes": []
+    },
+    "CheckIsContainedIn": {
+      "Description": "Check if column value is in a list",
+      "Arguments": [
+        "ColumnName",
+        "Values"
+      ],
+      "FormatAttributes": []
+    },
+    "CheckColumnComparison": {
+      "Description": "Compare two columns using an operator",
+      "Arguments": [
+        "ColumnName",
+        "CompareToColumnName",
+        "Operator"
+      ],
+      "FormatAttributes": []
+    }
+  },
+  "ModelDatasets": {
+    "CostAndUsage": {
+      "ModelRules": [
+        "AllocatedMethodId-TypeString",
+        "AllocatedMethodDetails-TypeString",
+        "AllocatedResourceId-TypeString",
+        "AllocatedResourceName-TypeString",
+        "AvailabilityZone-TypeString",
+        "BilledCost-Presence",
+        "BilledCost-TypeNumeric",
+        "BillingAccountId-Presence",
+        "BillingAccountId-TypeString",
+        "BillingAccountName-Presence",
+        "BillingAccountName-TypeString",
+        "BillingAccountType-TypeString",
+        "BillingCurrency-Presence",
+        "BillingCurrency-TypeString",
+        "BillingPeriodEnd-Presence",
+        "BillingPeriodEnd-TypeDateTime",
+        "BillingPeriodStart-Presence",
+        "BillingPeriodStart-TypeDateTime",
+        "CapacityReservationId-TypeString",
+        "CapacityReservationStatus-TypeString",
+        "ChargeCategory-Presence",
+        "ChargeCategory-TypeString",
+        "ChargeClass-Presence",
+        "ChargeClass-TypeString",
+        "ChargeDescription-Presence",
+        "ChargeDescription-TypeString",
+        "ChargeFrequency-TypeString",
+        "ChargePeriodEnd-Presence",
+        "ChargePeriodEnd-TypeDateTime",
+        "ChargePeriodStart-Presence",
+        "ChargePeriodStart-TypeDateTime",
+        "CommitmentDiscountCategory-TypeString",
+        "CommitmentDiscountId-TypeString",
+        "CommitmentDiscountName-TypeString",
+        "CommitmentDiscountQuantity-TypeNumeric",
+        "CommitmentDiscountStatus-TypeString",
+        "CommitmentDiscountType-TypeString",
+        "CommitmentDiscountUnit-TypeString",
+        "ConsumedQuantity-TypeNumeric",
+        "ConsumedUnit-TypeString",
+        "ContractedCost-TypeNumeric",
+        "ContractedUnitPrice-TypeNumeric",
+        "EffectiveCost-Presence",
+        "EffectiveCost-TypeNumeric",
+        "HostProviderName-Presence",
+        "HostProviderName-TypeString",
+        "InvoiceId-TypeString",
+        "InvoiceIssuerName-Presence",
+        "InvoiceIssuerName-TypeString",
+        "ListCost-Presence",
+        "ListCost-TypeNumeric",
+        "ListUnitPrice-TypeNumeric",
+        "PricingCategory-TypeString",
+        "PricingCurrency-TypeString",
+        "PricingCurrencyContractedUnitPrice-TypeNumeric",
+        "PricingCurrencyEffectiveCost-TypeNumeric",
+        "PricingCurrencyListUnitPrice-TypeNumeric",
+        "PricingQuantity-Presence",
+        "PricingQuantity-TypeNumeric",
+        "PricingUnit-Presence",
+        "PricingUnit-TypeString",
+        "RegionId-TypeString",
+        "RegionName-TypeString",
+        "ResourceId-TypeString",
+        "ResourceName-TypeString",
+        "ResourceType-TypeString",
+        "ServiceProviderName-Presence",
+        "ServiceProviderName-TypeString",
+        "ServiceCategory-TypeString",
+        "ServiceName-Presence",
+        "ServiceName-TypeString",
+        "ServiceSubcategory-TypeString",
+        "SkuId-TypeString",
+        "SkuMeter-TypeString",
+        "SkuPriceId-TypeString",
+        "SubAccountId-TypeString",
+        "SubAccountName-TypeString",
+        "SubAccountType-TypeString",
+        "ChargeCategory-Enum",
+        "ChargeClass-Enum",
+        "ServiceCategory-Enum",
+        "BilledCost-Calculation",
+        "ListCost-Calculation",
+        "ContractedCost-Calculation",
+        "ChargePeriodEnd-After-ChargePeriodStart",
+        "BillingPeriodEnd-After-BillingPeriodStart"
+      ]
+    }
+  },
+  "ModelRules": {
+    "AllocatedMethodId-TypeString": {
+      "Function": "Validation",
+      "Reference": "AllocatedMethodId",
+      "ValidationCriteria": {
+        "MustSatisfy": "AllocatedMethodId MUST be a string",
+        "Requirement": {
+          "CheckFunction": "TypeString",
+          "ColumnName": "AllocatedMethodId"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "AllocatedMethodDetails-TypeString": {
+      "Function": "Validation",
+      "Reference": "AllocatedMethodDetails",
+      "ValidationCriteria": {
+        "MustSatisfy": "AllocatedMethodDetails MUST be a string",
+        "Requirement": {
+          "CheckFunction": "TypeString",
+          "ColumnName": "AllocatedMethodDetails"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "AllocatedResourceId-TypeString": {
+      "Function": "Validation",
+      "Reference": "AllocatedResourceId",
+      "ValidationCriteria": {
+        "MustSatisfy": "AllocatedResourceId MUST be a string",
+        "Requirement": {
+          "CheckFunction": "TypeString",
+          "ColumnName": "AllocatedResourceId"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "AllocatedResourceName-TypeString": {
+      "Function": "Validation",
+      "Reference": "AllocatedResourceName",
+      "ValidationCriteria": {
+        "MustSatisfy": "AllocatedResourceName MUST be a string",
+        "Requirement": {
+          "CheckFunction": "TypeString",
+          "ColumnName": "AllocatedResourceName"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "AvailabilityZone-TypeString": {
+      "Function": "Validation",
+      "Reference": "AvailabilityZone",
+      "ValidationCriteria": {
+        "MustSatisfy": "AvailabilityZone MUST be a string",
+        "Requirement": {
+          "CheckFunction": "TypeString",
+          "ColumnName": "AvailabilityZone"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "BilledCost-Presence": {
+      "Function": "Validation",
+      "Reference": "BilledCost",
+      "ValidationCriteria": {
+        "MustSatisfy": "BilledCost MUST be present and non-null",
+        "Requirement": {
+          "CheckFunction": "AND",
+          "Items": [
+            {
+              "CheckFunction": "ColumnPresent",
+              "ColumnName": "BilledCost"
+            },
+            {
+              "CheckFunction": "CheckNotValue",
+              "ColumnName": "BilledCost",
+              "Value": null
+            }
+          ]
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "BilledCost-TypeNumeric": {
+      "Function": "Validation",
+      "Reference": "BilledCost",
+      "ValidationCriteria": {
+        "MustSatisfy": "BilledCost MUST be a numeric value",
+        "Requirement": {
+          "CheckFunction": "FormatNumeric",
+          "ColumnName": "BilledCost"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "BillingAccountId-Presence": {
+      "Function": "Validation",
+      "Reference": "BillingAccountId",
+      "ValidationCriteria": {
+        "MustSatisfy": "BillingAccountId MUST be present and non-null",
+        "Requirement": {
+          "CheckFunction": "AND",
+          "Items": [
+            {
+              "CheckFunction": "ColumnPresent",
+              "ColumnName": "BillingAccountId"
+            },
+            {
+              "CheckFunction": "CheckNotValue",
+              "ColumnName": "BillingAccountId",
+              "Value": null
+            }
+          ]
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "BillingAccountId-TypeString": {
+      "Function": "Validation",
+      "Reference": "BillingAccountId",
+      "ValidationCriteria": {
+        "MustSatisfy": "BillingAccountId MUST be a string",
+        "Requirement": {
+          "CheckFunction": "TypeString",
+          "ColumnName": "BillingAccountId"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "BillingAccountName-Presence": {
+      "Function": "Validation",
+      "Reference": "BillingAccountName",
+      "ValidationCriteria": {
+        "MustSatisfy": "BillingAccountName MUST be present and non-null",
+        "Requirement": {
+          "CheckFunction": "AND",
+          "Items": [
+            {
+              "CheckFunction": "ColumnPresent",
+              "ColumnName": "BillingAccountName"
+            },
+            {
+              "CheckFunction": "CheckNotValue",
+              "ColumnName": "BillingAccountName",
+              "Value": null
+            }
+          ]
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "BillingAccountName-TypeString": {
+      "Function": "Validation",
+      "Reference": "BillingAccountName",
+      "ValidationCriteria": {
+        "MustSatisfy": "BillingAccountName MUST be a string",
+        "Requirement": {
+          "CheckFunction": "TypeString",
+          "ColumnName": "BillingAccountName"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "BillingAccountType-TypeString": {
+      "Function": "Validation",
+      "Reference": "BillingAccountType",
+      "ValidationCriteria": {
+        "MustSatisfy": "BillingAccountType MUST be a string",
+        "Requirement": {
+          "CheckFunction": "TypeString",
+          "ColumnName": "BillingAccountType"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "BillingCurrency-Presence": {
+      "Function": "Validation",
+      "Reference": "BillingCurrency",
+      "ValidationCriteria": {
+        "MustSatisfy": "BillingCurrency MUST be present and non-null",
+        "Requirement": {
+          "CheckFunction": "AND",
+          "Items": [
+            {
+              "CheckFunction": "ColumnPresent",
+              "ColumnName": "BillingCurrency"
+            },
+            {
+              "CheckFunction": "CheckNotValue",
+              "ColumnName": "BillingCurrency",
+              "Value": null
+            }
+          ]
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "BillingCurrency-TypeString": {
+      "Function": "Validation",
+      "Reference": "BillingCurrency",
+      "ValidationCriteria": {
+        "MustSatisfy": "BillingCurrency MUST be a string",
+        "Requirement": {
+          "CheckFunction": "TypeString",
+          "ColumnName": "BillingCurrency"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "BillingPeriodEnd-Presence": {
+      "Function": "Validation",
+      "Reference": "BillingPeriodEnd",
+      "ValidationCriteria": {
+        "MustSatisfy": "BillingPeriodEnd MUST be present and non-null",
+        "Requirement": {
+          "CheckFunction": "AND",
+          "Items": [
+            {
+              "CheckFunction": "ColumnPresent",
+              "ColumnName": "BillingPeriodEnd"
+            },
+            {
+              "CheckFunction": "CheckNotValue",
+              "ColumnName": "BillingPeriodEnd",
+              "Value": null
+            }
+          ]
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "BillingPeriodEnd-TypeDateTime": {
+      "Function": "Validation",
+      "Reference": "BillingPeriodEnd",
+      "ValidationCriteria": {
+        "MustSatisfy": "BillingPeriodEnd MUST be a valid datetime",
+        "Requirement": {
+          "CheckFunction": "FormatDateTime",
+          "ColumnName": "BillingPeriodEnd"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "BillingPeriodStart-Presence": {
+      "Function": "Validation",
+      "Reference": "BillingPeriodStart",
+      "ValidationCriteria": {
+        "MustSatisfy": "BillingPeriodStart MUST be present and non-null",
+        "Requirement": {
+          "CheckFunction": "AND",
+          "Items": [
+            {
+              "CheckFunction": "ColumnPresent",
+              "ColumnName": "BillingPeriodStart"
+            },
+            {
+              "CheckFunction": "CheckNotValue",
+              "ColumnName": "BillingPeriodStart",
+              "Value": null
+            }
+          ]
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "BillingPeriodStart-TypeDateTime": {
+      "Function": "Validation",
+      "Reference": "BillingPeriodStart",
+      "ValidationCriteria": {
+        "MustSatisfy": "BillingPeriodStart MUST be a valid datetime",
+        "Requirement": {
+          "CheckFunction": "FormatDateTime",
+          "ColumnName": "BillingPeriodStart"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "CapacityReservationId-TypeString": {
+      "Function": "Validation",
+      "Reference": "CapacityReservationId",
+      "ValidationCriteria": {
+        "MustSatisfy": "CapacityReservationId MUST be a string",
+        "Requirement": {
+          "CheckFunction": "TypeString",
+          "ColumnName": "CapacityReservationId"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "CapacityReservationStatus-TypeString": {
+      "Function": "Validation",
+      "Reference": "CapacityReservationStatus",
+      "ValidationCriteria": {
+        "MustSatisfy": "CapacityReservationStatus MUST be a string",
+        "Requirement": {
+          "CheckFunction": "TypeString",
+          "ColumnName": "CapacityReservationStatus"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "ChargeCategory-Presence": {
+      "Function": "Validation",
+      "Reference": "ChargeCategory",
+      "ValidationCriteria": {
+        "MustSatisfy": "ChargeCategory MUST be present and non-null",
+        "Requirement": {
+          "CheckFunction": "AND",
+          "Items": [
+            {
+              "CheckFunction": "ColumnPresent",
+              "ColumnName": "ChargeCategory"
+            },
+            {
+              "CheckFunction": "CheckNotValue",
+              "ColumnName": "ChargeCategory",
+              "Value": null
+            }
+          ]
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "ChargeCategory-TypeString": {
+      "Function": "Validation",
+      "Reference": "ChargeCategory",
+      "ValidationCriteria": {
+        "MustSatisfy": "ChargeCategory MUST be a string",
+        "Requirement": {
+          "CheckFunction": "TypeString",
+          "ColumnName": "ChargeCategory"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "ChargeClass-Presence": {
+      "Function": "Validation",
+      "Reference": "ChargeClass",
+      "ValidationCriteria": {
+        "MustSatisfy": "ChargeClass MUST be present and non-null",
+        "Requirement": {
+          "CheckFunction": "AND",
+          "Items": [
+            {
+              "CheckFunction": "ColumnPresent",
+              "ColumnName": "ChargeClass"
+            },
+            {
+              "CheckFunction": "CheckNotValue",
+              "ColumnName": "ChargeClass",
+              "Value": null
+            }
+          ]
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "ChargeClass-TypeString": {
+      "Function": "Validation",
+      "Reference": "ChargeClass",
+      "ValidationCriteria": {
+        "MustSatisfy": "ChargeClass MUST be a string",
+        "Requirement": {
+          "CheckFunction": "TypeString",
+          "ColumnName": "ChargeClass"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "ChargeDescription-Presence": {
+      "Function": "Validation",
+      "Reference": "ChargeDescription",
+      "ValidationCriteria": {
+        "MustSatisfy": "ChargeDescription MUST be present and non-null",
+        "Requirement": {
+          "CheckFunction": "AND",
+          "Items": [
+            {
+              "CheckFunction": "ColumnPresent",
+              "ColumnName": "ChargeDescription"
+            },
+            {
+              "CheckFunction": "CheckNotValue",
+              "ColumnName": "ChargeDescription",
+              "Value": null
+            }
+          ]
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "ChargeDescription-TypeString": {
+      "Function": "Validation",
+      "Reference": "ChargeDescription",
+      "ValidationCriteria": {
+        "MustSatisfy": "ChargeDescription MUST be a string",
+        "Requirement": {
+          "CheckFunction": "TypeString",
+          "ColumnName": "ChargeDescription"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "ChargeFrequency-TypeString": {
+      "Function": "Validation",
+      "Reference": "ChargeFrequency",
+      "ValidationCriteria": {
+        "MustSatisfy": "ChargeFrequency MUST be a string",
+        "Requirement": {
+          "CheckFunction": "TypeString",
+          "ColumnName": "ChargeFrequency"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "ChargePeriodEnd-Presence": {
+      "Function": "Validation",
+      "Reference": "ChargePeriodEnd",
+      "ValidationCriteria": {
+        "MustSatisfy": "ChargePeriodEnd MUST be present and non-null",
+        "Requirement": {
+          "CheckFunction": "AND",
+          "Items": [
+            {
+              "CheckFunction": "ColumnPresent",
+              "ColumnName": "ChargePeriodEnd"
+            },
+            {
+              "CheckFunction": "CheckNotValue",
+              "ColumnName": "ChargePeriodEnd",
+              "Value": null
+            }
+          ]
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "ChargePeriodEnd-TypeDateTime": {
+      "Function": "Validation",
+      "Reference": "ChargePeriodEnd",
+      "ValidationCriteria": {
+        "MustSatisfy": "ChargePeriodEnd MUST be a valid datetime",
+        "Requirement": {
+          "CheckFunction": "FormatDateTime",
+          "ColumnName": "ChargePeriodEnd"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "ChargePeriodStart-Presence": {
+      "Function": "Validation",
+      "Reference": "ChargePeriodStart",
+      "ValidationCriteria": {
+        "MustSatisfy": "ChargePeriodStart MUST be present and non-null",
+        "Requirement": {
+          "CheckFunction": "AND",
+          "Items": [
+            {
+              "CheckFunction": "ColumnPresent",
+              "ColumnName": "ChargePeriodStart"
+            },
+            {
+              "CheckFunction": "CheckNotValue",
+              "ColumnName": "ChargePeriodStart",
+              "Value": null
+            }
+          ]
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "ChargePeriodStart-TypeDateTime": {
+      "Function": "Validation",
+      "Reference": "ChargePeriodStart",
+      "ValidationCriteria": {
+        "MustSatisfy": "ChargePeriodStart MUST be a valid datetime",
+        "Requirement": {
+          "CheckFunction": "FormatDateTime",
+          "ColumnName": "ChargePeriodStart"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "CommitmentDiscountCategory-TypeString": {
+      "Function": "Validation",
+      "Reference": "CommitmentDiscountCategory",
+      "ValidationCriteria": {
+        "MustSatisfy": "CommitmentDiscountCategory MUST be a string",
+        "Requirement": {
+          "CheckFunction": "TypeString",
+          "ColumnName": "CommitmentDiscountCategory"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "CommitmentDiscountId-TypeString": {
+      "Function": "Validation",
+      "Reference": "CommitmentDiscountId",
+      "ValidationCriteria": {
+        "MustSatisfy": "CommitmentDiscountId MUST be a string",
+        "Requirement": {
+          "CheckFunction": "TypeString",
+          "ColumnName": "CommitmentDiscountId"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "CommitmentDiscountName-TypeString": {
+      "Function": "Validation",
+      "Reference": "CommitmentDiscountName",
+      "ValidationCriteria": {
+        "MustSatisfy": "CommitmentDiscountName MUST be a string",
+        "Requirement": {
+          "CheckFunction": "TypeString",
+          "ColumnName": "CommitmentDiscountName"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "CommitmentDiscountQuantity-TypeNumeric": {
+      "Function": "Validation",
+      "Reference": "CommitmentDiscountQuantity",
+      "ValidationCriteria": {
+        "MustSatisfy": "CommitmentDiscountQuantity MUST be a numeric value",
+        "Requirement": {
+          "CheckFunction": "FormatNumeric",
+          "ColumnName": "CommitmentDiscountQuantity"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "CommitmentDiscountStatus-TypeString": {
+      "Function": "Validation",
+      "Reference": "CommitmentDiscountStatus",
+      "ValidationCriteria": {
+        "MustSatisfy": "CommitmentDiscountStatus MUST be a string",
+        "Requirement": {
+          "CheckFunction": "TypeString",
+          "ColumnName": "CommitmentDiscountStatus"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "CommitmentDiscountType-TypeString": {
+      "Function": "Validation",
+      "Reference": "CommitmentDiscountType",
+      "ValidationCriteria": {
+        "MustSatisfy": "CommitmentDiscountType MUST be a string",
+        "Requirement": {
+          "CheckFunction": "TypeString",
+          "ColumnName": "CommitmentDiscountType"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "CommitmentDiscountUnit-TypeString": {
+      "Function": "Validation",
+      "Reference": "CommitmentDiscountUnit",
+      "ValidationCriteria": {
+        "MustSatisfy": "CommitmentDiscountUnit MUST be a string",
+        "Requirement": {
+          "CheckFunction": "TypeString",
+          "ColumnName": "CommitmentDiscountUnit"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "ConsumedQuantity-TypeNumeric": {
+      "Function": "Validation",
+      "Reference": "ConsumedQuantity",
+      "ValidationCriteria": {
+        "MustSatisfy": "ConsumedQuantity MUST be a numeric value",
+        "Requirement": {
+          "CheckFunction": "FormatNumeric",
+          "ColumnName": "ConsumedQuantity"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "ConsumedUnit-TypeString": {
+      "Function": "Validation",
+      "Reference": "ConsumedUnit",
+      "ValidationCriteria": {
+        "MustSatisfy": "ConsumedUnit MUST be a string",
+        "Requirement": {
+          "CheckFunction": "TypeString",
+          "ColumnName": "ConsumedUnit"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "ContractedCost-TypeNumeric": {
+      "Function": "Validation",
+      "Reference": "ContractedCost",
+      "ValidationCriteria": {
+        "MustSatisfy": "ContractedCost MUST be a numeric value",
+        "Requirement": {
+          "CheckFunction": "FormatNumeric",
+          "ColumnName": "ContractedCost"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "ContractedUnitPrice-TypeNumeric": {
+      "Function": "Validation",
+      "Reference": "ContractedUnitPrice",
+      "ValidationCriteria": {
+        "MustSatisfy": "ContractedUnitPrice MUST be a numeric value",
+        "Requirement": {
+          "CheckFunction": "FormatNumeric",
+          "ColumnName": "ContractedUnitPrice"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "EffectiveCost-Presence": {
+      "Function": "Validation",
+      "Reference": "EffectiveCost",
+      "ValidationCriteria": {
+        "MustSatisfy": "EffectiveCost MUST be present and non-null",
+        "Requirement": {
+          "CheckFunction": "AND",
+          "Items": [
+            {
+              "CheckFunction": "ColumnPresent",
+              "ColumnName": "EffectiveCost"
+            },
+            {
+              "CheckFunction": "CheckNotValue",
+              "ColumnName": "EffectiveCost",
+              "Value": null
+            }
+          ]
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "EffectiveCost-TypeNumeric": {
+      "Function": "Validation",
+      "Reference": "EffectiveCost",
+      "ValidationCriteria": {
+        "MustSatisfy": "EffectiveCost MUST be a numeric value",
+        "Requirement": {
+          "CheckFunction": "FormatNumeric",
+          "ColumnName": "EffectiveCost"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "HostProviderName-Presence": {
+      "Function": "Validation",
+      "Reference": "HostProviderName",
+      "ValidationCriteria": {
+        "MustSatisfy": "HostProviderName MUST be present and non-null",
+        "Requirement": {
+          "CheckFunction": "AND",
+          "Items": [
+            {
+              "CheckFunction": "ColumnPresent",
+              "ColumnName": "HostProviderName"
+            },
+            {
+              "CheckFunction": "CheckNotValue",
+              "ColumnName": "HostProviderName",
+              "Value": null
+            }
+          ]
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "HostProviderName-TypeString": {
+      "Function": "Validation",
+      "Reference": "HostProviderName",
+      "ValidationCriteria": {
+        "MustSatisfy": "HostProviderName MUST be a string",
+        "Requirement": {
+          "CheckFunction": "TypeString",
+          "ColumnName": "HostProviderName"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "InvoiceId-TypeString": {
+      "Function": "Validation",
+      "Reference": "InvoiceId",
+      "ValidationCriteria": {
+        "MustSatisfy": "InvoiceId MUST be a string",
+        "Requirement": {
+          "CheckFunction": "TypeString",
+          "ColumnName": "InvoiceId"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "InvoiceIssuerName-Presence": {
+      "Function": "Validation",
+      "Reference": "InvoiceIssuerName",
+      "ValidationCriteria": {
+        "MustSatisfy": "InvoiceIssuerName MUST be present and non-null",
+        "Requirement": {
+          "CheckFunction": "AND",
+          "Items": [
+            {
+              "CheckFunction": "ColumnPresent",
+              "ColumnName": "InvoiceIssuerName"
+            },
+            {
+              "CheckFunction": "CheckNotValue",
+              "ColumnName": "InvoiceIssuerName",
+              "Value": null
+            }
+          ]
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "InvoiceIssuerName-TypeString": {
+      "Function": "Validation",
+      "Reference": "InvoiceIssuerName",
+      "ValidationCriteria": {
+        "MustSatisfy": "InvoiceIssuerName MUST be a string",
+        "Requirement": {
+          "CheckFunction": "TypeString",
+          "ColumnName": "InvoiceIssuerName"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "ListCost-Presence": {
+      "Function": "Validation",
+      "Reference": "ListCost",
+      "ValidationCriteria": {
+        "MustSatisfy": "ListCost MUST be present and non-null",
+        "Requirement": {
+          "CheckFunction": "AND",
+          "Items": [
+            {
+              "CheckFunction": "ColumnPresent",
+              "ColumnName": "ListCost"
+            },
+            {
+              "CheckFunction": "CheckNotValue",
+              "ColumnName": "ListCost",
+              "Value": null
+            }
+          ]
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "ListCost-TypeNumeric": {
+      "Function": "Validation",
+      "Reference": "ListCost",
+      "ValidationCriteria": {
+        "MustSatisfy": "ListCost MUST be a numeric value",
+        "Requirement": {
+          "CheckFunction": "FormatNumeric",
+          "ColumnName": "ListCost"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "ListUnitPrice-TypeNumeric": {
+      "Function": "Validation",
+      "Reference": "ListUnitPrice",
+      "ValidationCriteria": {
+        "MustSatisfy": "ListUnitPrice MUST be a numeric value",
+        "Requirement": {
+          "CheckFunction": "FormatNumeric",
+          "ColumnName": "ListUnitPrice"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "PricingCategory-TypeString": {
+      "Function": "Validation",
+      "Reference": "PricingCategory",
+      "ValidationCriteria": {
+        "MustSatisfy": "PricingCategory MUST be a string",
+        "Requirement": {
+          "CheckFunction": "TypeString",
+          "ColumnName": "PricingCategory"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "PricingCurrency-TypeString": {
+      "Function": "Validation",
+      "Reference": "PricingCurrency",
+      "ValidationCriteria": {
+        "MustSatisfy": "PricingCurrency MUST be a string",
+        "Requirement": {
+          "CheckFunction": "TypeString",
+          "ColumnName": "PricingCurrency"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "PricingCurrencyContractedUnitPrice-TypeNumeric": {
+      "Function": "Validation",
+      "Reference": "PricingCurrencyContractedUnitPrice",
+      "ValidationCriteria": {
+        "MustSatisfy": "PricingCurrencyContractedUnitPrice MUST be a numeric value",
+        "Requirement": {
+          "CheckFunction": "FormatNumeric",
+          "ColumnName": "PricingCurrencyContractedUnitPrice"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "PricingCurrencyEffectiveCost-TypeNumeric": {
+      "Function": "Validation",
+      "Reference": "PricingCurrencyEffectiveCost",
+      "ValidationCriteria": {
+        "MustSatisfy": "PricingCurrencyEffectiveCost MUST be a numeric value",
+        "Requirement": {
+          "CheckFunction": "FormatNumeric",
+          "ColumnName": "PricingCurrencyEffectiveCost"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "PricingCurrencyListUnitPrice-TypeNumeric": {
+      "Function": "Validation",
+      "Reference": "PricingCurrencyListUnitPrice",
+      "ValidationCriteria": {
+        "MustSatisfy": "PricingCurrencyListUnitPrice MUST be a numeric value",
+        "Requirement": {
+          "CheckFunction": "FormatNumeric",
+          "ColumnName": "PricingCurrencyListUnitPrice"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "PricingQuantity-Presence": {
+      "Function": "Validation",
+      "Reference": "PricingQuantity",
+      "ValidationCriteria": {
+        "MustSatisfy": "PricingQuantity MUST be present and non-null",
+        "Requirement": {
+          "CheckFunction": "AND",
+          "Items": [
+            {
+              "CheckFunction": "ColumnPresent",
+              "ColumnName": "PricingQuantity"
+            },
+            {
+              "CheckFunction": "CheckNotValue",
+              "ColumnName": "PricingQuantity",
+              "Value": null
+            }
+          ]
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "PricingQuantity-TypeNumeric": {
+      "Function": "Validation",
+      "Reference": "PricingQuantity",
+      "ValidationCriteria": {
+        "MustSatisfy": "PricingQuantity MUST be a numeric value",
+        "Requirement": {
+          "CheckFunction": "FormatNumeric",
+          "ColumnName": "PricingQuantity"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "PricingUnit-Presence": {
+      "Function": "Validation",
+      "Reference": "PricingUnit",
+      "ValidationCriteria": {
+        "MustSatisfy": "PricingUnit MUST be present and non-null",
+        "Requirement": {
+          "CheckFunction": "AND",
+          "Items": [
+            {
+              "CheckFunction": "ColumnPresent",
+              "ColumnName": "PricingUnit"
+            },
+            {
+              "CheckFunction": "CheckNotValue",
+              "ColumnName": "PricingUnit",
+              "Value": null
+            }
+          ]
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "PricingUnit-TypeString": {
+      "Function": "Validation",
+      "Reference": "PricingUnit",
+      "ValidationCriteria": {
+        "MustSatisfy": "PricingUnit MUST be a string",
+        "Requirement": {
+          "CheckFunction": "TypeString",
+          "ColumnName": "PricingUnit"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "RegionId-TypeString": {
+      "Function": "Validation",
+      "Reference": "RegionId",
+      "ValidationCriteria": {
+        "MustSatisfy": "RegionId MUST be a string",
+        "Requirement": {
+          "CheckFunction": "TypeString",
+          "ColumnName": "RegionId"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "RegionName-TypeString": {
+      "Function": "Validation",
+      "Reference": "RegionName",
+      "ValidationCriteria": {
+        "MustSatisfy": "RegionName MUST be a string",
+        "Requirement": {
+          "CheckFunction": "TypeString",
+          "ColumnName": "RegionName"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "ResourceId-TypeString": {
+      "Function": "Validation",
+      "Reference": "ResourceId",
+      "ValidationCriteria": {
+        "MustSatisfy": "ResourceId MUST be a string",
+        "Requirement": {
+          "CheckFunction": "TypeString",
+          "ColumnName": "ResourceId"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "ResourceName-TypeString": {
+      "Function": "Validation",
+      "Reference": "ResourceName",
+      "ValidationCriteria": {
+        "MustSatisfy": "ResourceName MUST be a string",
+        "Requirement": {
+          "CheckFunction": "TypeString",
+          "ColumnName": "ResourceName"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "ResourceType-TypeString": {
+      "Function": "Validation",
+      "Reference": "ResourceType",
+      "ValidationCriteria": {
+        "MustSatisfy": "ResourceType MUST be a string",
+        "Requirement": {
+          "CheckFunction": "TypeString",
+          "ColumnName": "ResourceType"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "ServiceProviderName-Presence": {
+      "Function": "Validation",
+      "Reference": "ServiceProviderName",
+      "ValidationCriteria": {
+        "MustSatisfy": "ServiceProviderName MUST be present and non-null",
+        "Requirement": {
+          "CheckFunction": "AND",
+          "Items": [
+            {
+              "CheckFunction": "ColumnPresent",
+              "ColumnName": "ServiceProviderName"
+            },
+            {
+              "CheckFunction": "CheckNotValue",
+              "ColumnName": "ServiceProviderName",
+              "Value": null
+            }
+          ]
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "ServiceProviderName-TypeString": {
+      "Function": "Validation",
+      "Reference": "ServiceProviderName",
+      "ValidationCriteria": {
+        "MustSatisfy": "ServiceProviderName MUST be a string",
+        "Requirement": {
+          "CheckFunction": "TypeString",
+          "ColumnName": "ServiceProviderName"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "ServiceCategory-TypeString": {
+      "Function": "Validation",
+      "Reference": "ServiceCategory",
+      "ValidationCriteria": {
+        "MustSatisfy": "ServiceCategory MUST be a string",
+        "Requirement": {
+          "CheckFunction": "TypeString",
+          "ColumnName": "ServiceCategory"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "ServiceName-Presence": {
+      "Function": "Validation",
+      "Reference": "ServiceName",
+      "ValidationCriteria": {
+        "MustSatisfy": "ServiceName MUST be present and non-null",
+        "Requirement": {
+          "CheckFunction": "AND",
+          "Items": [
+            {
+              "CheckFunction": "ColumnPresent",
+              "ColumnName": "ServiceName"
+            },
+            {
+              "CheckFunction": "CheckNotValue",
+              "ColumnName": "ServiceName",
+              "Value": null
+            }
+          ]
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "ServiceName-TypeString": {
+      "Function": "Validation",
+      "Reference": "ServiceName",
+      "ValidationCriteria": {
+        "MustSatisfy": "ServiceName MUST be a string",
+        "Requirement": {
+          "CheckFunction": "TypeString",
+          "ColumnName": "ServiceName"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "ServiceSubcategory-TypeString": {
+      "Function": "Validation",
+      "Reference": "ServiceSubcategory",
+      "ValidationCriteria": {
+        "MustSatisfy": "ServiceSubcategory MUST be a string",
+        "Requirement": {
+          "CheckFunction": "TypeString",
+          "ColumnName": "ServiceSubcategory"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "SkuId-TypeString": {
+      "Function": "Validation",
+      "Reference": "SkuId",
+      "ValidationCriteria": {
+        "MustSatisfy": "SkuId MUST be a string",
+        "Requirement": {
+          "CheckFunction": "TypeString",
+          "ColumnName": "SkuId"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "SkuMeter-TypeString": {
+      "Function": "Validation",
+      "Reference": "SkuMeter",
+      "ValidationCriteria": {
+        "MustSatisfy": "SkuMeter MUST be a string",
+        "Requirement": {
+          "CheckFunction": "TypeString",
+          "ColumnName": "SkuMeter"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "SkuPriceId-TypeString": {
+      "Function": "Validation",
+      "Reference": "SkuPriceId",
+      "ValidationCriteria": {
+        "MustSatisfy": "SkuPriceId MUST be a string",
+        "Requirement": {
+          "CheckFunction": "TypeString",
+          "ColumnName": "SkuPriceId"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "SubAccountId-TypeString": {
+      "Function": "Validation",
+      "Reference": "SubAccountId",
+      "ValidationCriteria": {
+        "MustSatisfy": "SubAccountId MUST be a string",
+        "Requirement": {
+          "CheckFunction": "TypeString",
+          "ColumnName": "SubAccountId"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "SubAccountName-TypeString": {
+      "Function": "Validation",
+      "Reference": "SubAccountName",
+      "ValidationCriteria": {
+        "MustSatisfy": "SubAccountName MUST be a string",
+        "Requirement": {
+          "CheckFunction": "TypeString",
+          "ColumnName": "SubAccountName"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "SubAccountType-TypeString": {
+      "Function": "Validation",
+      "Reference": "SubAccountType",
+      "ValidationCriteria": {
+        "MustSatisfy": "SubAccountType MUST be a string",
+        "Requirement": {
+          "CheckFunction": "TypeString",
+          "ColumnName": "SubAccountType"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "ChargeCategory-Enum": {
+      "Function": "Validation",
+      "Reference": "ChargeCategory",
+      "ValidationCriteria": {
+        "MustSatisfy": "ChargeCategory MUST be one of ['Usage', 'Purchase', 'Tax', 'Adjustment', 'Credit', 'Fee', 'Other']",
+        "Requirement": {
+          "CheckFunction": "CheckIsContainedIn",
+          "ColumnName": "ChargeCategory",
+          "Values": [
+            "Usage",
+            "Purchase",
+            "Tax",
+            "Adjustment",
+            "Credit",
+            "Fee",
+            "Other"
+          ]
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "ChargeClass-Enum": {
+      "Function": "Validation",
+      "Reference": "ChargeClass",
+      "ValidationCriteria": {
+        "MustSatisfy": "ChargeClass MUST be one of ['Original', 'Correction', 'Sub-Allocation']",
+        "Requirement": {
+          "CheckFunction": "CheckIsContainedIn",
+          "ColumnName": "ChargeClass",
+          "Values": [
+            "Original",
+            "Correction",
+            "Sub-Allocation"
+          ]
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "ServiceCategory-Enum": {
+      "Function": "Validation",
+      "Reference": "ServiceCategory",
+      "ValidationCriteria": {
+        "MustSatisfy": "ServiceCategory MUST be one of ['Compute', 'Storage', 'Network', 'Database', 'Analytics', 'AI Services', 'Management', 'Security', 'Developer Tools', 'Business Applications', 'Other']",
+        "Requirement": {
+          "CheckFunction": "CheckIsContainedIn",
+          "ColumnName": "ServiceCategory",
+          "Values": [
+            "Compute",
+            "Storage",
+            "Network",
+            "Database",
+            "Analytics",
+            "AI Services",
+            "Management",
+            "Security",
+            "Developer Tools",
+            "Business Applications",
+            "Other"
+          ]
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "BilledCost-Calculation": {
+      "Function": "Validation",
+      "Reference": "BilledCost",
+      "ValidationCriteria": {
+        "MustSatisfy": "BilledCost MUST equal BilledUnitPrice * PricingQuantity",
+        "Requirement": {
+          "CheckFunction": "ColumnByColumnEqualsColumnValue",
+          "ColumnAName": "BilledUnitPrice",
+          "ColumnBName": "PricingQuantity",
+          "ResultColumnName": "BilledCost"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "ListCost-Calculation": {
+      "Function": "Validation",
+      "Reference": "ListCost",
+      "ValidationCriteria": {
+        "MustSatisfy": "ListCost MUST equal ListUnitPrice * PricingQuantity",
+        "Requirement": {
+          "CheckFunction": "ColumnByColumnEqualsColumnValue",
+          "ColumnAName": "ListUnitPrice",
+          "ColumnBName": "PricingQuantity",
+          "ResultColumnName": "ListCost"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "ContractedCost-Calculation": {
+      "Function": "Validation",
+      "Reference": "ContractedCost",
+      "ValidationCriteria": {
+        "MustSatisfy": "ContractedCost MUST equal ContractedUnitPrice * PricingQuantity",
+        "Requirement": {
+          "CheckFunction": "ColumnByColumnEqualsColumnValue",
+          "ColumnAName": "ContractedUnitPrice",
+          "ColumnBName": "PricingQuantity",
+          "ResultColumnName": "ContractedCost"
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "ChargePeriodEnd-After-ChargePeriodStart": {
+      "Function": "Validation",
+      "Reference": "ChargePeriodEnd",
+      "ValidationCriteria": {
+        "MustSatisfy": "ChargePeriodEnd MUST be greater than or equal to ChargePeriodStart",
+        "Requirement": {
+          "CheckFunction": "CheckColumnComparison",
+          "ColumnName": "ChargePeriodEnd",
+          "CompareToColumnName": "ChargePeriodStart",
+          "Operator": ">="
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    },
+    "BillingPeriodEnd-After-BillingPeriodStart": {
+      "Function": "Validation",
+      "Reference": "BillingPeriodEnd",
+      "ValidationCriteria": {
+        "MustSatisfy": "BillingPeriodEnd MUST be greater than or equal to BillingPeriodStart",
+        "Requirement": {
+          "CheckFunction": "CheckColumnComparison",
+          "ColumnName": "BillingPeriodEnd",
+          "CompareToColumnName": "BillingPeriodStart",
+          "Operator": ">="
+        },
+        "Keyword": "MUST",
+        "Condition": {},
+        "Dependencies": []
+      },
+      "EntityType": "Dimension",
+      "ModelVersionIntroduced": "1.3",
+      "Status": "Active",
+      "ApplicabilityCriteria": [],
+      "Type": "Static"
+    }
+  }
+}

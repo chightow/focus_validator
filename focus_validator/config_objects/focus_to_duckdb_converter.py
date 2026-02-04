@@ -587,7 +587,8 @@ class FormatNumericGenerator(DuckDBCheckGenerator):
         msg_sql = message.replace("'", "''")
 
         # Requirement SQL (finds violations)
-        condition = f"{col} IS NOT NULL AND NOT (TRIM({col}::TEXT) ~ '^[+-]?([0-9]*[.])?[0-9]+$')"
+        # Updated regex to support scientific notation (e.g. 1.2e-5)
+        condition = f"{col} IS NOT NULL AND NOT (TRIM({col}::TEXT) ~ '^[+-]?([0-9]*[.])?[0-9]+([eE][+-]?[0-9]+)?$')"
         condition = self._apply_condition(condition)
 
         requirement_sql = f"""
@@ -1075,6 +1076,95 @@ class CheckValueGenerator(DuckDBCheckGenerator):
         return sql_query.get_predicate_sql()
 
 
+class CheckIsContainedInGenerator(DuckDBCheckGenerator):
+    """
+    Generator for 'check_is_contained_in' rule.
+    Validates that a column value is present within a provided list of allowed values.
+    Commonly used for Enum-style checks in FOCUS standards.
+    """
+
+    REQUIRED_KEYS = {"ColumnName", "Values"}
+
+    def generateSql(self) -> SQLQuery:
+        col = self.params.ColumnName
+        values = self.params.Values
+        val_list = ", ".join(["'" + str(v).replace("'", "''") + "'" for v in values])
+        message = self.errorMessage or f"{col} MUST be one of [{val_list}]."
+        msg_sql = message.replace("'", "''")
+
+        # Requirement SQL (finds violations)
+        condition = f"{col} IS NOT NULL AND {col} NOT IN ({val_list})"
+        condition = self._apply_condition(condition)
+
+        requirement_sql = f"""
+        WITH invalid AS (
+            SELECT 1
+            FROM {{table_name}}
+            WHERE {condition}
+        )
+        SELECT
+            COUNT(*) AS violations,
+            CASE WHEN COUNT(*) > 0 THEN '{msg_sql}' END AS error_message
+        FROM invalid
+        """
+
+        # Predicate SQL (for condition mode)
+        predicate_sql = f"{col} IS NOT NULL AND {col} IN ({val_list})"
+
+        return SQLQuery(requirement_sql=requirement_sql.strip(), predicate_sql=predicate_sql)
+
+    def getCheckType(self) -> str:
+        return "check_is_contained_in"
+
+
+class CheckColumnComparisonGenerator(DuckDBCheckGenerator):
+    """
+    Generator for logical comparison between two columns.
+    Example: ListCost MUST be >= BilledCost.
+    This supports operators: >=, >, <=, <, =, <>.
+    """
+
+    REQUIRED_KEYS = {"ColumnName", "CompareToColumnName", "Operator"}
+
+    def generateSql(self) -> SQLQuery:
+        col = self.params.ColumnName
+        target = self.params.CompareToColumnName
+        op = self.params.Operator
+
+        # Invert operator for violation check.
+        # The validator looks for rows that VIOLATE the rule.
+        # If the rule is 'col >= target', we search for 'col < target'.
+        invert_map = {">=": "<", ">": "<=", "<=": ">", "<": ">=", "=": "<>", "<>": "="}
+        inv_op = invert_map.get(op, op)
+
+        message = self.errorMessage or f"{col} MUST be {op} {target}."
+        msg_sql = message.replace("'", "''")
+
+        # Requirement SQL (finds violations)
+        condition = f"{col} IS NOT NULL AND {target} IS NOT NULL AND {col} {inv_op} {target}"
+        condition = self._apply_condition(condition)
+
+        requirement_sql = f"""
+        WITH invalid AS (
+            SELECT 1
+            FROM {{table_name}}
+            WHERE {condition}
+        )
+        SELECT
+            COUNT(*) AS violations,
+            CASE WHEN COUNT(*) > 0 THEN '{msg_sql}' END AS error_message
+        FROM invalid
+        """
+
+        # Predicate SQL (for condition mode)
+        predicate_sql = f"{col} IS NOT NULL AND {target} IS NOT NULL AND {col} {op} {target}"
+
+        return SQLQuery(requirement_sql=requirement_sql.strip(), predicate_sql=predicate_sql)
+
+    def getCheckType(self) -> str:
+        return "check_column_comparison"
+
+
 class CheckNotValueGenerator(DuckDBCheckGenerator):
     REQUIRED_KEYS = {"ColumnName", "Value"}
 
@@ -1297,6 +1387,13 @@ class CheckDecimalValueGenerator(SkippedCheck):
 
 
 class ColumnByColumnEqualsColumnValueGenerator(DuckDBCheckGenerator):
+    """
+    Generator for multi-column mathematical invariants.
+    Specifically validates that BilledCost = BilledUnitPrice * PricingQuantity (or similar).
+    Uses rounding to 4 decimal places to account for floating-point precision drift
+    common in CSV export/import processes.
+    """
+
     REQUIRED_KEYS = {"ColumnAName", "ColumnBName", "ResultColumnName"}
 
     def generateSql(self) -> SQLQuery:
@@ -1307,7 +1404,9 @@ class ColumnByColumnEqualsColumnValueGenerator(DuckDBCheckGenerator):
         msg_sql = message.replace("'", "''")
 
         # Requirement SQL (finds violations)
-        condition = f"{a} IS NOT NULL AND {b} IS NOT NULL AND {r} IS NOT NULL AND ({a} * {b}) <> {r}"
+        # Note: We CAST to DOUBLE and ROUND to 4 decimals to ensure that minor float variations
+        # (e.g. 1.0000000001 vs 1.0) do not cause false validation failures.
+        condition = f"{a} IS NOT NULL AND {b} IS NOT NULL AND {r} IS NOT NULL AND ROUND(CAST({a} AS DOUBLE) * CAST({b} AS DOUBLE), 4) <> ROUND(CAST({r} AS DOUBLE), 4)"
         condition = self._apply_condition(condition)
 
         requirement_sql = f"""
@@ -1323,7 +1422,7 @@ class ColumnByColumnEqualsColumnValueGenerator(DuckDBCheckGenerator):
         """
 
         # Predicate SQL (for condition mode)
-        predicate_sql = f"{a} IS NOT NULL AND {b} IS NOT NULL AND {r} IS NOT NULL AND ({a} * {b}) = {r}"
+        predicate_sql = f"{a} IS NOT NULL AND {b} IS NOT NULL AND {r} IS NOT NULL AND ROUND(CAST({a} AS DOUBLE) * CAST({b} AS DOUBLE), 4) = ROUND(CAST({r} AS DOUBLE), 4)"
 
         return SQLQuery(
             requirement_sql=requirement_sql.strip(), predicate_sql=predicate_sql
@@ -2057,6 +2156,14 @@ class FocusToDuckDBSchemaConverter:
         },
         "CheckValue": {
             "generator": CheckValueGenerator,
+            "factory": lambda args: "ColumnName",
+        },
+        "CheckIsContainedIn": {
+            "generator": CheckIsContainedInGenerator,
+            "factory": lambda args: "ColumnName",
+        },
+        "CheckColumnComparison": {
+            "generator": CheckColumnComparisonGenerator,
             "factory": lambda args: "ColumnName",
         },
         "CheckNotValue": {
