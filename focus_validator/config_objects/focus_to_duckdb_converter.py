@@ -1104,7 +1104,12 @@ class CheckIsContainedInGenerator(DuckDBCheckGenerator):
     """
     Generator for 'check_is_contained_in' rule.
     Validates that a column value is present within a provided list of allowed values.
-    Commonly used for Enum-style checks in FOCUS standards.
+    
+    RATIONALE FOR FOCUS 1.3:
+    The FOCUS 1.3 specification introduces strict "Allowed Values" (Enums) for core 
+    columns like ChargeCategory, ChargeClass, and ChargeType. This generator allows 
+    the validator to enforce these standardized vocabularies dynamically across 
+    different cloud provider datasets.
     """
 
     REQUIRED_KEYS = {"ColumnName", "Values"}
@@ -1146,6 +1151,12 @@ class CheckColumnComparisonGenerator(DuckDBCheckGenerator):
     Generator for logical comparison between two columns.
     Example: ListCost MUST be >= BilledCost.
     This supports operators: >=, >, <=, <, =, <>.
+
+    RATIONALE FOR FOCUS 1.3:
+    FOCUS 1.3 establishes critical "Inter-column Invariants" to ensure provider 
+    transparency. This generator validates relational logic, such as ensuring 
+    ListCost remains greater than or equal to BilledCost, or verifying that 
+    BillingPeriodEnd occurs after BillingPeriodStart.
     """
 
     REQUIRED_KEYS = {"ColumnName", "CompareToColumnName", "Operator"}
