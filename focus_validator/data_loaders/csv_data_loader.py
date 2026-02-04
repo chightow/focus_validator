@@ -82,6 +82,12 @@ class CSVDataLoader:
         """
         polars_dtypes = {}
         for col, pandas_dtype in dtype_dict.items():
+            # Force known FOCUS columns to string for reliable format validation from CSV
+            if col in self.common_string_columns:
+                self.log.debug(f"Forcing column {col} to Utf8")
+                polars_dtypes[col] = pl.Utf8()
+                continue
+
             # Handle Polars types directly
             if isinstance(pandas_dtype, pl.DataType):
                 polars_dtypes[col] = pandas_dtype
@@ -506,12 +512,23 @@ class CSVDataLoader:
     def load(self):
         """
         Load CSV data with enhanced error handling and type coercion.
-
-        Returns:
-            pl.DataFrame: Loaded DataFrame
+        For FOCUS 1.3 compliance, we ensure that columns typically containing 
+        large or precision-sensitive numeric data (like BilledUnitPrice or PricingQuantity) 
+        are not incorrectly inferred as narrower types (like Int64), which 
+        can cause loading failures or data loss.
         """
         # Reset failed columns tracking
         self.failed_columns = set()
+
+        if not self.column_types:
+            # Standard FOCUS core columns that frequently trigger inference errors 
+            # if not explicitly typed.
+            numeric_cols = {
+                "BilledCost", "ContractedCost", "EffectiveCost", "ListCost",
+                "BilledUnitPrice", "ContractedUnitPrice", "ListUnitPrice",
+                "PricingQuantity", "ConsumedQuantity", "AllocatedRatio"
+            }
+            self.column_types = {col: pl.Float64() for col in numeric_cols if col in self.common_string_columns}
 
         # Determine parse_dates list from column_types
         parse_dates_list = self._get_parse_dates_list()
