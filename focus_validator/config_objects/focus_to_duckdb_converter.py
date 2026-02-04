@@ -728,7 +728,14 @@ class FormatBillingCurrencyCodeGenerator(DuckDBCheckGenerator):
         )
         msg_sql = message.replace("'", "''")
 
-        # Get valid currency codes from CSV file
+        # RATIONALE FOR DYNAMIC CURRENCY LOADING (ISO 4217):
+        # 1. CENTRALIZED SOURCE OF TRUTH: Rather than hardcoding the 150+ valid ISO 4217 
+        #    currency codes directly into the generator or the SQL, we load them from a 
+        #    managed CSV to ensure the validator stays up-to-date with global standards.
+        #
+        # 2. SQL EFFICIENCY: By loading these into a Python set first, we can generate a 
+        #    highly efficient SQL 'IN' clause containing only the valid codes, ensuring
+        #    the DuckDB check remains performant even with large datasets.
         import os
         base_dir = os.path.dirname(os.path.dirname(__file__))
         code_file = os.path.join(base_dir, "rules", "currency_codes.csv")

@@ -15,57 +15,20 @@ class CSVDataLoader:
         # Track failed columns for reporting
         self.failed_columns = set()
 
-        # Common FOCUS columns that might need special handling
-        self.common_string_columns = {
-            "AccountId",
-            "AccountName",
-            "AvailabilityZone",
+        # Common FOCUS columns that might need special handling (Numeric)
+        # We specify Float64 to prevent Polars from incorrectly inferring Int64 
+        # when a column starts with integers, which would cause failure on 
+        # later decimal values.
+        self.focus_numeric_columns = {
             "BilledCost",
             "BilledUnitPrice",
-            "BillingAccountId",
-            "BillingAccountName",
-            "BillingCurrency",
-            "BillingPeriodEnd",
-            "BillingPeriodStart",
-            "ChargeCategory",
-            "ChargeClass",
-            "ChargeDescription",
-            "ChargeFrequency",
-            "ChargePeriodEnd",
-            "ChargePeriodStart",
-            "ChargeType",
-            "CommitmentDiscountCategory",
-            "CommitmentDiscountId",
-            "CommitmentDiscountName",
-            "CommitmentDiscountStatus",
-            "CommitmentDiscountType",
             "ConsumedQuantity",
-            "ConsumedService",
-            "ConsumedUnit",
             "ContractedCost",
             "ContractedUnitPrice",
             "EffectiveCost",
-            "InvoiceIssuerName",
             "ListCost",
             "ListUnitPrice",
-            "PricingCategory",
-            "PricingCurrencyEffectiveCost",
             "PricingQuantity",
-            "PricingUnit",
-            "ProviderName",
-            "PublisherName",
-            "RegionId",
-            "RegionName",
-            "ResourceId",
-            "ResourceName",
-            "ResourceType",
-            "ServiceCategory",
-            "ServiceName",
-            "SkuId",
-            "SkuPriceId",
-            "SubAccountId",
-            "SubAccountName",
-            "Tags",
         }
 
     def _convert_pandas_to_polars_dtypes(
@@ -82,10 +45,11 @@ class CSVDataLoader:
         """
         polars_dtypes = {}
         for col, pandas_dtype in dtype_dict.items():
-            # Force known FOCUS columns to string for reliable format validation from CSV
-            if col in self.common_string_columns:
-                self.log.debug(f"Forcing column {col} to Utf8")
-                polars_dtypes[col] = pl.Utf8()
+            # Use Float64 for FOCUS numeric columns to handle decimal precision 
+            # and avoid integer inference issues.
+            if col in self.focus_numeric_columns:
+                self.log.debug(f"Forcing numeric column {col} to Float64")
+                polars_dtypes[col] = pl.Float64()
                 continue
 
             # Handle Polars types directly
@@ -523,12 +487,7 @@ class CSVDataLoader:
         if not self.column_types:
             # Standard FOCUS core columns that frequently trigger inference errors 
             # if not explicitly typed.
-            numeric_cols = {
-                "BilledCost", "ContractedCost", "EffectiveCost", "ListCost",
-                "BilledUnitPrice", "ContractedUnitPrice", "ListUnitPrice",
-                "PricingQuantity", "ConsumedQuantity", "AllocatedRatio"
-            }
-            self.column_types = {col: pl.Float64() for col in numeric_cols if col in self.common_string_columns}
+            self.column_types = {col: pl.Float64() for col in self.focus_numeric_columns}
 
         # Determine parse_dates list from column_types
         parse_dates_list = self._get_parse_dates_list()
