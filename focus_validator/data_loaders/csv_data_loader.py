@@ -15,10 +15,16 @@ class CSVDataLoader:
         # Track failed columns for reporting
         self.failed_columns = set()
 
-        # Common FOCUS columns that might need special handling (Numeric)
-        # We specify Float64 to prevent Polars from incorrectly inferring Int64 
-        # when a column starts with integers, which would cause failure on 
-        # later decimal values.
+        # RATIONALE FOR REMOVED common_string_columns (FOCUS 1.3):
+        # We no longer force core FOCUS columns to Utf8 (string) because:
+        # 1. LOGICAL INVARIANTS: FOCUS 1.3 requires mathematical validation (e.g., Price * Qty = Cost).
+        #    These operations require native numeric types (Float64).
+        #
+        # 2. VALIDATOR CASTING: The scientific notation issues that previously forced string 
+        #    loading are now handled in the validator's SQL layer via DECIMAL(38,12) casting.
+        #
+        # 3. INFERENCE STABILITY: Explicitly typing as Float64 prevents Polars from 
+        #    crashing when it encounters mixed integer/decimal data in large CSVs.
         self.focus_numeric_columns = {
             "BilledCost",
             "BilledUnitPrice",
