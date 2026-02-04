@@ -15,11 +15,6 @@ class CSVDataLoader:
         # Track failed columns for reporting
         self.failed_columns = set()
 
-        # EXPLICIT FOCUS SCHEMATIC TYPES (FOCUS 1.3 PascalCase)
-        # This is a strict validation engine. We maintain explicit lists of column
-        # types to ensure that data is loaded with the precise representation 
-        # required for both format validation and logical invariants.
-        
         # 1. FOCUS Numeric Columns (Loaded as Float64 to support calculations)
         self.focus_numeric_columns = {
             "BilledCost",
