@@ -40,7 +40,7 @@ class PerformanceTracker:
         duration = time.time() - self.startTime
 
         # Get memory usage if psutil is available
-        memoryMb = 0
+        memoryMb: float = 0.0
         if HAS_PSUTIL:
             try:
                 process = psutil.Process(os.getpid())

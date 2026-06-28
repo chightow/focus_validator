@@ -6,7 +6,18 @@ import textwrap
 import time
 from abc import ABC, abstractmethod
 from types import MappingProxyType, SimpleNamespace
-from typing import Any, Callable, ClassVar, Dict, List, Optional, Tuple, Union
+from typing import (
+    Any,
+    Callable,
+    ClassVar,
+    Dict,
+    List,
+    NamedTuple,
+    Optional,
+    Set,
+    Tuple,
+    Union,
+)
 
 import duckdb  # type: ignore[import-untyped]
 import sqlglot  # type: ignore[import-untyped]
@@ -19,6 +30,14 @@ from .plan_builder import EdgeCtx, ValidationPlan
 from .rule import ModelRule
 
 log = logging.getLogger(__name__)
+
+
+class DependencyRef(NamedTuple):
+    """Reference to a dependency rule with tracking information."""
+
+    rule_id: str
+    rule_global_idx: int
+    referenced_rule_id: str
 
 
 def _compact_json(data: dict, max_len: int = 600) -> str:
@@ -194,6 +213,12 @@ class DuckDBColumnCheck:
         )
         self.sample_sql: Optional[str] = None  # For --show-violations feature
 
+        # Attributes for dependency tracking and rule composition
+        self._dependencies: Optional[List[DependencyRef]] = None
+        self._child_rule_ids: Optional[List[str]] = None
+        self._non_applicable: bool = False
+        self._non_applicable_reason: Optional[str] = None
+
 
 class DuckDBCheckGenerator(ABC):
     # Abstract base class for generating DuckDB validation checks
@@ -285,7 +310,7 @@ class DuckDBCheckGenerator(ABC):
                         )
                         or "",
                         error_message=getattr(chk, "errorMessage", None)
-                        or f"Validation rule {getattr(chk, 'rule_id', 'unknown')} failed - no specific error message available",
+                        or f"Validation rule {getattr(chk, 'rule_id', 'unknown')} failed",
                         nested_checks=getattr(chk, "nestedChecks", None),
                         nested_check_handler=getattr(chk, "nestedCheckHandler", None),
                         meta=getattr(chk, "meta", None),
@@ -310,7 +335,7 @@ class DuckDBCheckGenerator(ABC):
         )
         error_msg = getattr(self, "errorMessage", None)
         if not error_msg and not has_nested_checks:
-            error_msg = f"Validation rule {self.rule_id} failed - no specific error message available"
+            error_msg = f"Validation rule {self.rule_id} failed"
         elif not error_msg:
             # For composite rules, provide a fallback but allow runtime override
             error_msg = f"Validation rule {self.rule_id} failed"
@@ -337,6 +362,20 @@ class DuckDBCheckGenerator(ABC):
         if hasattr(self, "force_fail_due_to_upstream"):
             chk.force_fail_due_to_upstream = self.force_fail_due_to_upstream
 
+        # Transfer dependencies for runtime checking of skipped dependencies
+        if hasattr(self, "_dependencies"):
+            chk._dependencies = self._dependencies
+
+        # Transfer child rule IDs for composites
+        if hasattr(self, "_child_rule_ids"):
+            chk._child_rule_ids = self._child_rule_ids
+
+        # Transfer non-applicable flags for three-scenario handling
+        if hasattr(self, "_non_applicable"):
+            chk._non_applicable = self._non_applicable
+        if hasattr(self, "_non_applicable_reason"):
+            chk._non_applicable_reason = self._non_applicable_reason
+
         # Transfer sample_sql for --show-violations feature
         # Note: sample_limit is now centralized in FocusToDuckDBSchemaConverter.DEFAULT_SAMPLE_LIMIT
         if hasattr(self, "sample_sql"):
@@ -360,6 +399,20 @@ class DuckDBCheckGenerator(ABC):
         if isinstance(v, (int, float)) and not isinstance(v, bool):
             return str(v)
         return "'" + str(v).replace("'", "''") + "'"
+
+    def _get_validation_keyword(self) -> str:
+        """
+        Extract the validation keyword (MUST, SHOULD, MAY, RECOMMENDED, etc.)
+        from the rule's ValidationCriteria.
+
+        Returns:
+            str: The validation keyword, defaulting to "MUST" if not specified
+        """
+        if hasattr(self.rule, "validation_criteria"):
+            criteria = self.rule.validation_criteria
+            if hasattr(criteria, "keyword"):
+                return criteria.keyword
+        return "MUST"  # Default fallback
 
     def generatePredicate(self) -> str | None:
         """
@@ -403,6 +456,12 @@ class SkippedDynamicCheck(SkippedCheck):
         )
 
 
+class SkippedOptionalCheck(SkippedCheck):
+    def __init__(self, rule, rule_id: str, **kwargs: Any) -> None:
+        super().__init__(rule, rule_id, **kwargs)
+        self.errorMessage = "Rule skipped - marked as MAY/OPTIONAL and not enforced"
+
+
 class SkippedNonApplicableCheck(SkippedCheck):
     def __init__(self, rule, rule_id: str, **kwargs: Any) -> None:
         super().__init__(rule, rule_id, **kwargs)
@@ -411,12 +470,28 @@ class SkippedNonApplicableCheck(SkippedCheck):
         )
 
 
+class SkippedMissingGeneratorCheck(SkippedCheck):
+
+    def __init__(
+        self, rule, rule_id: str, check_function: str = "", **kwargs: Any
+    ) -> None:
+        super().__init__(rule, rule_id, **kwargs)
+        self.check_function = check_function
+        self.errorMessage = (
+            f"Rule skipped - missing generator for CheckFunction '{check_function}'. "
+            "This check type is not yet implemented."
+        )
+
+
 class ColumnPresentCheckGenerator(DuckDBCheckGenerator):
     REQUIRED_KEYS = {"ColumnName"}
 
     def generateSql(self) -> SQLQuery:
         col = self.params.ColumnName
-        message = self.errorMessage or f"Column '{col}' MUST be present in the table."
+        keyword = self._get_validation_keyword()
+        message = (
+            self.errorMessage or f"Column '{col}' {keyword} be present in the table."
+        )
         self.errorMessage = message  # <-- make sure run_check can see it
         msg_sql = message.replace("'", "''")
 
@@ -452,7 +527,8 @@ class TypeStringCheckGenerator(DuckDBCheckGenerator):
     # Generate type string validation check
     def generateSql(self) -> SQLQuery:
         col = self.params.ColumnName
-        message = self.errorMessage or f"{col} MUST be of type VARCHAR (string)."
+        keyword = self._get_validation_keyword()
+        message = self.errorMessage or f"{col} {keyword} be of type VARCHAR (string)."
         msg_sql = message.replace("'", "''")
 
         # Requirement SQL (finds violations)
@@ -488,8 +564,10 @@ class TypeDecimalCheckGenerator(DuckDBCheckGenerator):
     # Generate type decimal validation check
     def generateSql(self) -> SQLQuery:
         col = self.params.ColumnName
+        keyword = self._get_validation_keyword()
         message = (
-            self.errorMessage or f"{col} MUST be of type DECIMAL, DOUBLE, or FLOAT."
+            self.errorMessage
+            or f"{col} {keyword} be of type DECIMAL, DOUBLE, or FLOAT."
         )
         msg_sql = message.replace("'", "''")
 
@@ -532,9 +610,10 @@ class TypeDateTimeGenerator(DuckDBCheckGenerator):
     # - Also accept ISO 8601 UTC text: YYYY-MM-DDTHH:mm:ssZ
     def generateSql(self) -> SQLQuery:
         col = self.params.ColumnName
+        keyword = self._get_validation_keyword()
         message = (
             self.errorMessage
-            or f"{col} MUST be a DATE/TIMESTAMP (with/without TZ) "
+            or f"{col} {keyword} be a DATE/TIMESTAMP (with/without TZ) "
             f"or an ISO 8601 UTC string (YYYY-MM-DDTHH:mm:ssZ)."
         )
         msg_sql = message.replace("'", "''")
@@ -580,14 +659,16 @@ class FormatNumericGenerator(DuckDBCheckGenerator):
     # Generate numeric format validation check
     def generateSql(self) -> SQLQuery:
         col = self.params.ColumnName
+        keyword = self._get_validation_keyword()
         message = (
             self.errorMessage
-            or f"{col} MUST be a numeric value (optional +/- sign, optional decimal)."
+            or f"{col} {keyword} be a numeric value (optional +/- sign, optional decimal, optional scientific notation)."
         )
         msg_sql = message.replace("'", "''")
 
         # Requirement SQL (finds violations)
-        condition = f"{col} IS NOT NULL AND NOT (TRIM({col}::TEXT) ~ '^[+-]?([0-9]*[.])?[0-9]+$')"
+        # Pattern supports: 123, -123, 1.23, -1.23, 1.23e10, 1.23e-10, 1.23E+10, etc.
+        condition = f"{col} IS NOT NULL AND NOT (TRIM({col}::TEXT) ~ '^[+-]?([0-9]*[.])?[0-9]+([eE][+-]?[0-9]+)?$')"
         condition = self._apply_condition(condition)
 
         requirement_sql = f"""
@@ -603,13 +684,31 @@ class FormatNumericGenerator(DuckDBCheckGenerator):
         """
 
         # Predicate SQL (for condition mode)
-        predicate_sql = (
-            f"{col} IS NOT NULL AND (TRIM({col}::TEXT) ~ '^[+-]?([0-9]*[.])?[0-9]+$')"
-        )
+        predicate_sql = f"{col} IS NOT NULL AND (TRIM({col}::TEXT) ~ '^[+-]?([0-9]*[.])?[0-9]+([eE][+-]?[0-9]+)?$')"
 
         return SQLQuery(
             requirement_sql=requirement_sql.strip(), predicate_sql=predicate_sql
         )
+
+    def get_sample_sql(self) -> str:
+        """Return SQL to fetch sample violating rows for display"""
+        col = self.params.ColumnName
+
+        # Build condition to find violating rows
+        # Pattern supports: 123, -123, 1.23, -1.23, 1.23e10, 1.23e-10, 1.23E+10, etc.
+        condition = f"{col} IS NOT NULL AND NOT (TRIM({col}::TEXT) ~ '^[+-]?([0-9]*[.])?[0-9]+([eE][+-]?[0-9]+)?$')"
+        condition = self._apply_condition(condition)
+
+        return f"""
+        SELECT {col}
+        FROM {{table_name}}
+        WHERE {condition}
+        """
+
+    # Make sample_sql accessible as a property for the infrastructure
+    @property
+    def sample_sql(self) -> str:
+        return self.get_sample_sql()
 
     def getCheckType(self) -> str:
         return "format_numeric"
@@ -621,7 +720,8 @@ class FormatStringGenerator(DuckDBCheckGenerator):
     # Generate string format validation check for ASCII characters
     def generateSql(self) -> SQLQuery:
         col = self.params.ColumnName
-        message = self.errorMessage or f"{col} MUST contain only ASCII characters."
+        keyword = self._get_validation_keyword()
+        message = self.errorMessage or f"{col} {keyword} contain only ASCII characters."
         msg_sql = message.replace("'", "''")
 
         # Requirement SQL (finds violations)
@@ -647,6 +747,25 @@ class FormatStringGenerator(DuckDBCheckGenerator):
             requirement_sql=requirement_sql.strip(), predicate_sql=predicate_sql
         )
 
+    def get_sample_sql(self) -> str:
+        """Return SQL to fetch sample violating rows for display"""
+        col = self.params.ColumnName
+
+        # Build condition to find violating rows (non-ASCII characters)
+        condition = f"{col} IS NOT NULL AND NOT ({col}::TEXT ~ '^[\\x00-\\x7F]*$')"
+        condition = self._apply_condition(condition)
+
+        return f"""
+        SELECT {col}
+        FROM {{table_name}}
+        WHERE {condition}
+        """
+
+    # Make sample_sql accessible as a property for the infrastructure
+    @property
+    def sample_sql(self) -> str:
+        return self.get_sample_sql()
+
     def getCheckType(self) -> str:
         return "format_string"
 
@@ -657,7 +776,10 @@ class FormatDateTimeGenerator(DuckDBCheckGenerator):
     # Generate datetime validation check for valid UTC datetime values
     def generateSql(self) -> SQLQuery:
         col = self.params.ColumnName
-        message = self.errorMessage or f"{col} MUST be a valid DateTime in UTC format"
+        keyword = self._get_validation_keyword()
+        message = (
+            self.errorMessage or f"{col} {keyword} be a valid DateTime in UTC format"
+        )
         msg_sql = message.replace("'", "''")
 
         # Requirement SQL (finds violations)
@@ -704,9 +826,10 @@ class FormatBillingCurrencyCodeGenerator(DuckDBCheckGenerator):
 
     def generateSql(self) -> SQLQuery:
         col = self.params.ColumnName
+        keyword = self._get_validation_keyword()
         message = (
             self.errorMessage
-            or f"{col} MUST be a valid ISO 4217 currency code (e.g., USD, EUR)."
+            or f"{col} {keyword} be a valid ISO 4217 currency code (e.g., USD, EUR)."
         )
         msg_sql = message.replace("'", "''")
 
@@ -750,9 +873,10 @@ class FormatCurrencyGenerator(DuckDBCheckGenerator):
     # Generate national currency code validation check (ISO 4217)
     def generateSql(self) -> SQLQuery:
         col = self.params.ColumnName
+        keyword = self._get_validation_keyword()
         message = (
             self.errorMessage
-            or f"{col} MUST be a valid ISO 4217 currency code (3 uppercase letters, e.g. USD, EUR)."
+            or f"{col} {keyword} be a valid ISO 4217 currency code (3 uppercase letters, e.g. USD, EUR)."
         )
         msg_sql = message.replace("'", "''")
 
@@ -953,7 +1077,8 @@ class FormatJSONGenerator(DuckDBCheckGenerator):
     # Generate JSON format validation check for valid JSON structures
     def generateSql(self) -> SQLQuery:
         col = self.params.ColumnName
-        message = self.errorMessage or f"{col} MUST be valid JSON format"
+        keyword = self._get_validation_keyword()
+        message = self.errorMessage or f"{col} {keyword} be valid JSON format"
         msg_sql = message.replace("'", "''")
 
         # Requirement SQL (finds violations)
@@ -1000,15 +1125,16 @@ class CheckValueGenerator(DuckDBCheckGenerator):
     def generateSql(self) -> SQLQuery:
         col = self.params.ColumnName
         value = self.params.Value
+        keyword = self._get_validation_keyword()
 
         # Build requirement SQL (finds violations)
         if value is None:
-            message = self.errorMessage or f"{col} MUST be NULL."
+            message = self.errorMessage or f"{col} {keyword} be NULL."
             condition = f"{col} IS NOT NULL"
             predicate = f"{col} IS NULL"  # Condition: rows where requirement applies
         else:
             val_escaped = str(value).replace("'", "''")
-            message = self.errorMessage or f"{col} MUST equal '{value}'."
+            message = self.errorMessage or f"{col} {keyword} equal '{value}'."
             condition = f"{col} != '{val_escaped}'"
             predicate = (
                 f"{col} = '{val_escaped}'"  # Condition: rows where requirement applies
@@ -1080,17 +1206,26 @@ class CheckNotValueGenerator(DuckDBCheckGenerator):
     def generateSql(self) -> SQLQuery:
         col = self.params.ColumnName
         value = self.params.Value
+        keyword = self._get_validation_keyword()
 
         # Build requirement SQL (finds violations)
         if value is None:
-            message = self.errorMessage or f"{col} MUST NOT be NULL."
+            # Handle keywords that already contain "NOT" (e.g., "MUST NOT")
+            if "NOT" in keyword.upper():
+                message = self.errorMessage or f"{col} {keyword} be NULL."
+            else:
+                message = self.errorMessage or f"{col} {keyword} NOT be NULL."
             condition = f"{col} IS NULL"
             predicate = (
                 f"{col} IS NOT NULL"  # Condition: rows where requirement applies
             )
         else:
             val_escaped = str(value).replace("'", "''")
-            message = self.errorMessage or f"{col} MUST NOT be '{value}'."
+            # Handle keywords that already contain "NOT" (e.g., "MUST NOT")
+            if "NOT" in keyword.upper():
+                message = self.errorMessage or f"{col} {keyword} be '{value}'."
+            else:
+                message = self.errorMessage or f"{col} {keyword} NOT be '{value}'."
             condition = f"({col} IS NOT NULL AND {col} = '{val_escaped}')"
             predicate = f"({col} IS NOT NULL AND {col} <> '{val_escaped}')"
 
@@ -1157,7 +1292,10 @@ class CheckSameValueGenerator(DuckDBCheckGenerator):
     def generateSql(self) -> SQLQuery:
         col_a = self.params.ColumnAName
         col_b = self.params.ColumnBName
-        message = self.errorMessage or f"{col_a} and {col_b} MUST have the same value."
+        keyword = self._get_validation_keyword()
+        message = (
+            self.errorMessage or f"{col_a} and {col_b} {keyword} have the same value."
+        )
         msg_sql = message.replace("'", "''")
 
         # Requirement SQL (finds violations)
@@ -1226,9 +1364,18 @@ class CheckNotSameValueGenerator(DuckDBCheckGenerator):
     def generateSql(self) -> SQLQuery:
         col_a = self.params.ColumnAName
         col_b = self.params.ColumnBName
-        message = (
-            self.errorMessage or f"{col_a} and {col_b} MUST NOT have the same value."
-        )
+        keyword = self._get_validation_keyword()
+        # Handle keywords that already contain "NOT" (e.g., "MUST NOT")
+        if "NOT" in keyword.upper():
+            message = (
+                self.errorMessage
+                or f"{col_a} and {col_b} {keyword} have the same value."
+            )
+        else:
+            message = (
+                self.errorMessage
+                or f"{col_a} and {col_b} {keyword} NOT have the same value."
+            )
         msg_sql = message.replace("'", "''")
 
         # Requirement SQL (finds violations)
@@ -1345,7 +1492,10 @@ class CheckGreaterOrEqualGenerator(DuckDBCheckGenerator):
     def generateSql(self) -> SQLQuery:
         col = self.params.ColumnName
         val = self.params.Value
-        message = self.errorMessage or f"{col} MUST be greater than or equal to {val}."
+        keyword = self._get_validation_keyword()
+        message = (
+            self.errorMessage or f"{col} {keyword} be greater than or equal to {val}."
+        )
         msg_sql = message.replace("'", "''")
 
         # Requirement SQL (finds violations)
@@ -1409,18 +1559,27 @@ class CheckDistinctCountGenerator(DuckDBCheckGenerator):
         a = self.params.ColumnAName
         b = self.params.ColumnBName
         n = self.params.ExpectedCount
+        keyword = self._get_validation_keyword()
 
         message = (
             self.errorMessage
-            or f"For each {a}, there MUST be exactly {n} distinct {b} values."
+            or f"For each {a}, there {keyword} be exactly {n} distinct {b} values."
         )
         msg_sql = message.replace("'", "''")
 
+        # Build WHERE clause for row-level filtering before aggregation
+        # This applies parent conditions (e.g., "SkuPriceId IS NOT NULL") before GROUP BY
+        where_clause = ""
+        if self.row_condition_sql and self.row_condition_sql.strip():
+            where_clause = f"WHERE {self.row_condition_sql}"
+
         # Requirement SQL (finds violations)
+        # IMPORTANT: Apply row_condition_sql BEFORE GROUP BY to filter groups themselves
         requirement_sql = f"""
         WITH counts AS (
             SELECT {a} AS grp, COUNT(DISTINCT {b}) AS distinct_count
             FROM {{table_name}}
+            {where_clause}
             GROUP BY {a}
         ),
         invalid AS (
@@ -1528,6 +1687,2090 @@ class CheckModelRuleGenerator(DuckDBCheckGenerator):
         return chk
 
 
+class JSONCheckPathTypeGenerator(DuckDBCheckGenerator):
+    """
+    Check element(s) at JSON path is of a particular type.
+
+    Arguments:
+        ColumnName: The column containing JSON data
+        Path: JSONPath expression (e.g., "$.key" or "$.items[*].field")
+        ExpectedType: Expected JSON type (e.g., "string", "number", "boolean", "object", "array", "null")
+
+    Uses DuckDB's json_extract and custom type detection to validate JSON path types.
+    Supports both single values and array paths with [*] syntax.
+
+    For array paths (e.g., $.items[*].type), validates that ALL elements match the expected type.
+    """
+
+    REQUIRED_KEYS = {"ColumnName", "Path", "ExpectedType"}
+
+    def generateSql(self) -> SQLQuery:
+        col = self.params.ColumnName
+        path = self.params.Path
+        expected_type = self.params.ExpectedType
+        keyword = self._get_validation_keyword()
+
+        # Normalize expected type to lowercase for comparison
+        expected_type_lower = expected_type.lower()
+
+        # Map specific numeric type names to generic 'number' for JSON validation
+        # In JSON, there's no distinction between decimal, integer, float, etc. - they're all numbers
+        if expected_type_lower in (
+            "decimal",
+            "integer",
+            "float",
+            "double",
+            "bigint",
+            "int",
+            "numeric",
+        ):
+            expected_type_normalized = "number"
+        else:
+            expected_type_normalized = expected_type_lower
+
+        # Build error message
+        message = (
+            self.errorMessage
+            or f"{col} at path '{path}' {keyword} be of type '{expected_type}'"
+        )
+        msg_sql = message.replace("'", "''")
+
+        # Escape single quotes in path for SQL
+        path_escaped = path.replace("'", "''")
+
+        # Helper function to detect JSON type from a value
+        # Maps DuckDB's json_type results to JSON type names
+        def type_check_expr(value_expr: str) -> str:
+            return f"""
+                CASE
+                    WHEN {value_expr} IS NULL THEN NULL
+                    WHEN json_type({value_expr}) = 'BOOLEAN' THEN 'boolean'
+                    WHEN json_type({value_expr}) IN ('TINYINT', 'SMALLINT', 'INTEGER', 'BIGINT', 'UTINYINT', 'USMALLINT', 'UINTEGER', 'UBIGINT', 'FLOAT', 'DOUBLE', 'DECIMAL', 'HUGEINT', 'UHUGEINT') THEN 'number'
+                    WHEN json_type({value_expr}) = 'VARCHAR' THEN 'string'
+                    WHEN json_type({value_expr}) = 'NULL' THEN 'null'
+                    WHEN json_type({value_expr}) = 'ARRAY' THEN 'array'
+                    WHEN json_type({value_expr}) IN ('OBJECT', 'JSON') THEN 'object'
+                    ELSE 'unknown'
+                END
+            """
+
+        # Detect if path contains array wildcard [*]
+        # If it does, we know json_extract will return an ARRAY, so we can use unnest directly
+        # If not, it returns a single value, so we check the type directly
+        is_array_path = "[*]" in path
+
+        extracted_value = f"json_extract(TRY_CAST({col} AS JSON), '{path_escaped}')"
+
+        if is_array_path:
+            # Array path: json_extract returns an ARRAY of values
+            # We need to check each element in the array
+            requirement_sql = f"""
+            WITH invalid AS (
+                SELECT 1
+                FROM {{table_name}}
+                WHERE {col} IS NOT NULL
+                    AND json_valid({col}::TEXT)
+                    AND (
+                        {extracted_value} IS NULL
+                        OR json_array_length({extracted_value}) = 0
+                        OR EXISTS (
+                            SELECT 1
+                            FROM unnest({extracted_value}) AS t(elem)
+                            WHERE {type_check_expr('elem')} != '{expected_type_normalized}'
+                        )
+                    )
+            )
+            SELECT
+                COUNT(*) AS violations,
+                CASE WHEN COUNT(*) > 0 THEN '{msg_sql}' END AS error_message
+            FROM invalid
+            """
+
+            predicate_sql = f"""
+                {col} IS NOT NULL
+                AND json_valid({col}::TEXT)
+                AND {extracted_value} IS NOT NULL
+                AND json_array_length({extracted_value}) > 0
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM unnest({extracted_value}) AS t(elem)
+                    WHERE {type_check_expr('elem')} != '{expected_type_normalized}'
+                )
+            """
+        else:
+            # Single value path: json_extract returns a single JSON value
+            # Check the type directly
+            requirement_sql = f"""
+            WITH invalid AS (
+                SELECT 1
+                FROM {{table_name}}
+                WHERE {col} IS NOT NULL
+                    AND json_valid({col}::TEXT)
+                    AND (
+                        {extracted_value} IS NULL
+                        OR {type_check_expr(extracted_value)} != '{expected_type_normalized}'
+                    )
+            )
+            SELECT
+                COUNT(*) AS violations,
+                CASE WHEN COUNT(*) > 0 THEN '{msg_sql}' END AS error_message
+            FROM invalid
+            """
+
+            predicate_sql = f"""
+                {col} IS NOT NULL
+                AND json_valid({col}::TEXT)
+                AND {extracted_value} IS NOT NULL
+                AND {type_check_expr(extracted_value)} = '{expected_type_normalized}'
+            """
+
+        return SQLQuery(
+            requirement_sql=requirement_sql.strip(), predicate_sql=predicate_sql.strip()
+        )
+
+    def getCheckType(self) -> str:
+        return "json_path_type"
+
+
+class JSONCheckPathKeyValueFormatGenerator(DuckDBCheckGenerator):
+    """
+    Check element(s) at JSON path conform to KeyValueFormat requirements.
+
+    Arguments:
+        ColumnName: The column containing JSON data
+        Path: JSONPath expression (e.g., "$.tags" or "$.items[*].metadata")
+
+    KeyValueFormat requirements:
+    1. Must be a valid JSON object (not array, not primitive)
+    2. Keys must be unique within the object
+    3. Values must be primitive types only (string, number, boolean, null)
+    4. Values must NOT be objects or arrays
+
+    For array paths (e.g., $.items[*].tags), validates ALL elements.
+    """
+
+    REQUIRED_KEYS = {"ColumnName", "Path"}
+
+    def generateSql(self) -> SQLQuery:
+        col = self.params.ColumnName
+        path = self.params.Path
+        keyword = self._get_validation_keyword()
+
+        # Build error message
+        message = (
+            self.errorMessage
+            or f"{col} at path '{path}' {keyword} conform to KeyValueFormat (JSON object with primitive values only)"
+        )
+        msg_sql = message.replace("'", "''")
+
+        # Escape single quotes in path for SQL
+        path_escaped = path.replace("'", "''")
+
+        # Detect if path contains array wildcard [*]
+        is_array_path = "[*]" in path
+
+        extracted_value = f"json_extract(TRY_CAST({col} AS JSON), '{path_escaped}')"
+
+        # Function to check if a value is a valid KeyValueFormat object
+        # Requirements:
+        # 1. Must be an OBJECT type
+        # 2. All values must be primitive (not OBJECT or ARRAY)
+        # Strategy: Use json_keys() to get all keys, then check each value's type
+        def keyvalue_check(value_expr: str) -> str:
+            return f"""(
+                json_type({value_expr}) IN ('OBJECT', 'JSON')
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM unnest(json_keys({value_expr})) AS t(key_name)
+                    WHERE json_type(json_extract({value_expr}, '$.' || key_name)) IN ('OBJECT', 'ARRAY', 'JSON')
+                )
+            )"""
+
+        if is_array_path:
+            # Array path: json_extract returns an ARRAY of values
+            # Check each element conforms to KeyValueFormat
+            # Skip if path doesn't exist (NULL) or returns empty array
+            requirement_sql = f"""
+            WITH invalid AS (
+                SELECT 1
+                FROM {{table_name}}
+                WHERE {col} IS NOT NULL
+                    AND json_valid({col}::TEXT)
+                    AND {extracted_value} IS NOT NULL
+                    AND json_array_length({extracted_value}) > 0
+                    AND EXISTS (
+                        SELECT 1
+                        FROM unnest({extracted_value}) AS t(elem)
+                        WHERE NOT {keyvalue_check('elem')}
+                    )
+            )
+            SELECT
+                COUNT(*) AS violations,
+                CASE WHEN COUNT(*) > 0 THEN '{msg_sql}' END AS error_message
+            FROM invalid
+            """
+
+            predicate_sql = f"""
+                {col} IS NOT NULL
+                AND json_valid({col}::TEXT)
+                AND {extracted_value} IS NOT NULL
+                AND json_array_length({extracted_value}) > 0
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM unnest({extracted_value}) AS t(elem)
+                    WHERE NOT {keyvalue_check('elem')}
+                )
+            """
+        else:
+            # Single value path: check the value directly
+            # Skip if path doesn't exist (NULL)
+            requirement_sql = f"""
+            WITH invalid AS (
+                SELECT 1
+                FROM {{table_name}}
+                WHERE {col} IS NOT NULL
+                    AND json_valid({col}::TEXT)
+                    AND {extracted_value} IS NOT NULL
+                    AND NOT {keyvalue_check(extracted_value)}
+            )
+            SELECT
+                COUNT(*) AS violations,
+                CASE WHEN COUNT(*) > 0 THEN '{msg_sql}' END AS error_message
+            FROM invalid
+            """
+
+            predicate_sql = f"""
+                {col} IS NOT NULL
+                AND json_valid({col}::TEXT)
+                AND {extracted_value} IS NOT NULL
+                AND {keyvalue_check(extracted_value)}
+            """
+
+        return SQLQuery(
+            requirement_sql=requirement_sql.strip(), predicate_sql=predicate_sql.strip()
+        )
+
+    def getCheckType(self) -> str:
+        return "json_path_keyvalue_format"
+
+
+class JSONCheckPathKeyStartsWithGenerator(DuckDBCheckGenerator):
+    """
+    Check element(s) at JSON path only have keys that start with a specific prefix,
+    ignoring certain specified keys.
+
+    Arguments:
+        ColumnName: The column containing JSON data
+        Path: JSONPath expression (e.g., "$.Elements[*]")
+        Prefix: Required prefix for keys (e.g., "x_")
+        IgnoreKeys: List of keys to exclude from validation
+
+    Use case: Enforce naming conventions like custom properties must start with "x_"
+    while allowing standard FOCUS-defined properties.
+
+    For array paths (e.g., $.Elements[*]), validates ALL elements.
+    """
+
+    REQUIRED_KEYS = {"ColumnName", "Path", "Prefix", "IgnoreKeys"}
+
+    def generateSql(self) -> SQLQuery:
+        col = self.params.ColumnName
+        path = self.params.Path
+        prefix = self.params.Prefix
+        ignore_keys = self.params.IgnoreKeys  # Should be a list
+        keyword = self._get_validation_keyword()
+
+        # Build error message
+        message = (
+            self.errorMessage
+            or f"{col} at path '{path}' keys {keyword} start with '{prefix}' (except {ignore_keys})"
+        )
+        msg_sql = message.replace("'", "''")
+
+        # Escape single quotes in path and prefix for SQL
+        path_escaped = path.replace("'", "''")
+        prefix_escaped = prefix.replace("'", "''")
+
+        # Build SQL array of ignored keys
+        if ignore_keys and len(ignore_keys) > 0:
+            ignore_keys_sql = (
+                "["
+                + ", ".join(f"'{k.replace('\"', '\"\"')}'" for k in ignore_keys)
+                + "]"
+            )
+        else:
+            ignore_keys_sql = "[]"
+
+        # Detect if path contains array wildcard [*]
+        is_array_path = "[*]" in path
+
+        extracted_value = f"json_extract(TRY_CAST({col} AS JSON), '{path_escaped}')"
+
+        # Function to check if all keys (except ignored ones) start with prefix
+        # Returns a check expression that's true if all non-ignored keys start with prefix
+        def keys_check(value_expr: str) -> str:
+            return f"""(
+                json_type({value_expr}) IN ('OBJECT', 'JSON')
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM unnest(json_keys({value_expr})) AS t(key_name)
+                    WHERE key_name NOT IN (SELECT unnest({ignore_keys_sql}))
+                      AND NOT starts_with(key_name, '{prefix_escaped}')
+                )
+            )"""
+
+        if is_array_path:
+            # Array path: json_extract returns an ARRAY of values
+            # Check each element has all keys starting with prefix (except ignored)
+            # Skip if path doesn't exist (NULL) or returns empty array
+            requirement_sql = f"""
+            WITH invalid AS (
+                SELECT 1
+                FROM {{table_name}}
+                WHERE {col} IS NOT NULL
+                    AND json_valid({col}::TEXT)
+                    AND {extracted_value} IS NOT NULL
+                    AND json_array_length({extracted_value}) > 0
+                    AND EXISTS (
+                        SELECT 1
+                        FROM unnest({extracted_value}) AS t(elem)
+                        WHERE NOT {keys_check('elem')}
+                    )
+            )
+            SELECT
+                COUNT(*) AS violations,
+                CASE WHEN COUNT(*) > 0 THEN '{msg_sql}' END AS error_message
+            FROM invalid
+            """
+
+            predicate_sql = f"""
+                {col} IS NOT NULL
+                AND json_valid({col}::TEXT)
+                AND {extracted_value} IS NOT NULL
+                AND json_array_length({extracted_value}) > 0
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM unnest({extracted_value}) AS t(elem)
+                    WHERE NOT {keys_check('elem')}
+                )
+            """
+        else:
+            # Single value path: check the value directly
+            # Skip if path doesn't exist (NULL)
+            requirement_sql = f"""
+            WITH invalid AS (
+                SELECT 1
+                FROM {{table_name}}
+                WHERE {col} IS NOT NULL
+                    AND json_valid({col}::TEXT)
+                    AND {extracted_value} IS NOT NULL
+                    AND NOT {keys_check(extracted_value)}
+            )
+            SELECT
+                COUNT(*) AS violations,
+                CASE WHEN COUNT(*) > 0 THEN '{msg_sql}' END AS error_message
+            FROM invalid
+            """
+
+            predicate_sql = f"""
+                {col} IS NOT NULL
+                AND json_valid({col}::TEXT)
+                AND {extracted_value} IS NOT NULL
+                AND {keys_check(extracted_value)}
+            """
+
+        return SQLQuery(
+            requirement_sql=requirement_sql.strip(), predicate_sql=predicate_sql.strip()
+        )
+
+    def getCheckType(self) -> str:
+        return "json_path_key_starts_with"
+
+
+class JSONCheckPathKeyExistsGenerator(DuckDBCheckGenerator):
+    """
+    Check if a specific key exists at a JSON path.
+
+    Arguments:
+        ColumnName: The column containing JSON data
+        Path: JSONPath expression ending with the key to check (e.g., "$.Elements[*].AllocatedRatio")
+
+    The path should end with the key name to check. For example:
+    - "$.Elements[*].AllocatedRatio" checks if each element in Elements has AllocatedRatio key
+    - "$.metadata.version" checks if metadata object has version key
+
+    For array paths (e.g., $.Elements[*].KeyName), validates ALL elements have the key.
+    """
+
+    REQUIRED_KEYS = {"ColumnName", "Path"}
+
+    def generateSql(self) -> SQLQuery:
+        col = self.params.ColumnName
+        path = self.params.Path
+        keyword = self._get_validation_keyword()
+
+        # Extract the key name from the path (last component after final '.')
+        # e.g., "$.Elements[*].AllocatedRatio" -> "AllocatedRatio"
+        if "." in path:
+            key_name = path.rsplit(".", 1)[1]
+            parent_path = path.rsplit(".", 1)[0]
+        else:
+            raise ValueError(
+                f"Path must contain at least one '.' to specify a key: {path}"
+            )
+
+        # Build error message
+        message = (
+            self.errorMessage
+            or f"{col} at path '{path}' key '{key_name}' {keyword} exist"
+        )
+        msg_sql = message.replace("'", "''")
+
+        # Escape single quotes for SQL
+        parent_path_escaped = parent_path.replace("'", "''")
+        key_name_escaped = key_name.replace("'", "''")
+
+        # Detect if parent path contains array wildcard [*]
+        is_array_path = "[*]" in parent_path
+
+        extracted_value = (
+            f"json_extract(TRY_CAST({col} AS JSON), '{parent_path_escaped}')"
+        )
+
+        if is_array_path:
+            # Array path: check each element has the key
+            # Use json_keys() to get keys of each object in the array
+            # Skip rows where: path doesn't exist, array is empty, or not all elements are objects
+            requirement_sql = f"""
+            WITH invalid AS (
+                SELECT 1
+                FROM {{table_name}}
+                WHERE {col} IS NOT NULL
+                    AND json_valid({col}::TEXT)
+                    AND {extracted_value} IS NOT NULL
+                    AND json_array_length({extracted_value}) > 0
+                    AND (
+                        EXISTS (
+                            SELECT 1
+                            FROM unnest({extracted_value}) AS t(elem)
+                            WHERE json_type(elem) NOT IN ('OBJECT', 'JSON')
+                        )
+                        OR EXISTS (
+                            SELECT 1
+                            FROM unnest({extracted_value}) AS t(elem)
+                            WHERE json_type(elem) IN ('OBJECT', 'JSON')
+                              AND '{key_name_escaped}' NOT IN (SELECT unnest(json_keys(elem)))
+                        )
+                    )
+            )
+            SELECT
+                COUNT(*) AS violations,
+                CASE WHEN COUNT(*) > 0 THEN '{msg_sql}' END AS error_message
+            FROM invalid
+            """
+
+            predicate_sql = f"""
+                {col} IS NOT NULL
+                AND json_valid({col}::TEXT)
+                AND {extracted_value} IS NOT NULL
+                AND json_array_length({extracted_value}) > 0
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM unnest({extracted_value}) AS t(elem)
+                    WHERE json_type(elem) NOT IN ('OBJECT', 'JSON')
+                )
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM unnest({extracted_value}) AS t(elem)
+                    WHERE json_type(elem) IN ('OBJECT', 'JSON')
+                      AND '{key_name_escaped}' NOT IN (SELECT unnest(json_keys(elem)))
+                )
+            """
+        else:
+            # Single object path: check if the key exists
+            requirement_sql = f"""
+            WITH invalid AS (
+                SELECT 1
+                FROM {{table_name}}
+                WHERE {col} IS NOT NULL
+                    AND json_valid({col}::TEXT)
+                    AND {extracted_value} IS NOT NULL
+                    AND json_type({extracted_value}) IN ('OBJECT', 'JSON')
+                    AND '{key_name_escaped}' NOT IN (SELECT unnest(json_keys({extracted_value})))
+            )
+            SELECT
+                COUNT(*) AS violations,
+                CASE WHEN COUNT(*) > 0 THEN '{msg_sql}' END AS error_message
+            FROM invalid
+            """
+
+            predicate_sql = f"""
+                {col} IS NOT NULL
+                AND json_valid({col}::TEXT)
+                AND {extracted_value} IS NOT NULL
+                AND json_type({extracted_value}) IN ('OBJECT', 'JSON')
+                AND '{key_name_escaped}' IN (SELECT unnest(json_keys({extracted_value})))
+            """
+
+        return SQLQuery(
+            requirement_sql=requirement_sql.strip(), predicate_sql=predicate_sql.strip()
+        )
+
+    def getCheckType(self) -> str:
+        return "json_path_key_exists"
+
+
+class JSONCheckPathValueGenerator(DuckDBCheckGenerator):
+    """
+    Check if element(s) at JSON path have a specific value.
+
+    Arguments:
+        ColumnName: The column containing JSON data
+        Path: JSONPath expression (e.g., "$.Elements[*].ContractId")
+        Value: The expected value to check against
+
+    For array paths (e.g., $.Elements[*].field), checks if ALL elements have the value.
+    For single paths (e.g., $.field), checks if the value matches.
+
+    Commonly used to check for null values or specific constants.
+    """
+
+    REQUIRED_KEYS = {"ColumnName", "Path", "Value"}
+
+    def generateSql(self) -> SQLQuery:
+        col = self.params.ColumnName
+        path = self.params.Path
+        value = self.params.Value
+        keyword = self._get_validation_keyword()
+
+        # Build error message
+        message = self.errorMessage or f"{col} at path '{path}' {keyword} equal {value}"
+        msg_sql = message.replace("'", "''")
+
+        # Escape single quotes for SQL
+        path_escaped = path.replace("'", "''")
+
+        # Convert Python value to SQL literal for comparison
+        # For JSON comparisons, we need to cast properly
+        if value is None:
+            value_json = "NULL"
+        elif isinstance(value, bool):
+            value_json = f"'{str(value).lower()}'"  # JSON booleans are lowercase
+        elif isinstance(value, (int, float)):
+            value_json = str(value)
+        else:
+            # String value - need to quote for JSON comparison
+            value_escaped = str(value).replace("'", "''")
+            value_json = f"'\"{value_escaped}\"'"  # JSON strings are quoted
+
+        # Detect if path contains array wildcard [*]
+        is_array_path = "[*]" in path
+
+        extracted_value = f"json_extract(TRY_CAST({col} AS JSON), '{path_escaped}')"
+
+        if is_array_path:
+            # Array path: check if ALL elements equal the value
+            # Extract as text for comparison since json_extract returns JSON
+            if value is None:
+                # For null checks, check if any element is NOT null (SQL NULL or JSON null string 'null')
+                requirement_sql = f"""
+                WITH invalid AS (
+                    SELECT 1
+                    FROM {{table_name}}
+                    WHERE {col} IS NOT NULL
+                        AND json_valid({col}::TEXT)
+                        AND {extracted_value} IS NOT NULL
+                        AND json_array_length({extracted_value}) > 0
+                        AND EXISTS (
+                            SELECT 1
+                            FROM unnest({extracted_value}) AS t(elem)
+                            WHERE elem IS NOT NULL AND elem::TEXT != 'null'
+                        )
+                )
+                SELECT
+                    COUNT(*) AS violations,
+                    CASE WHEN COUNT(*) > 0 THEN '{msg_sql}' END AS error_message
+                FROM invalid
+                """
+
+                predicate_sql = f"""
+                    {col} IS NOT NULL
+                    AND json_valid({col}::TEXT)
+                    AND {extracted_value} IS NOT NULL
+                    AND json_array_length({extracted_value}) > 0
+                    AND NOT EXISTS (
+                        SELECT 1
+                        FROM unnest({extracted_value}) AS t(elem)
+                        WHERE elem IS NOT NULL AND elem::TEXT != 'null'
+                    )
+                """
+            else:
+                # For non-null checks, compare as text since JSON extract returns JSON
+                requirement_sql = f"""
+                WITH invalid AS (
+                    SELECT 1
+                    FROM {{table_name}}
+                    WHERE {col} IS NOT NULL
+                        AND json_valid({col}::TEXT)
+                        AND {extracted_value} IS NOT NULL
+                        AND json_array_length({extracted_value}) > 0
+                        AND EXISTS (
+                            SELECT 1
+                            FROM unnest({extracted_value}) AS t(elem)
+                            WHERE elem::TEXT != {value_json} OR elem IS NULL
+                        )
+                )
+                SELECT
+                    COUNT(*) AS violations,
+                    CASE WHEN COUNT(*) > 0 THEN '{msg_sql}' END AS error_message
+                FROM invalid
+                """
+
+                predicate_sql = f"""
+                    {col} IS NOT NULL
+                    AND json_valid({col}::TEXT)
+                    AND {extracted_value} IS NOT NULL
+                    AND json_array_length({extracted_value}) > 0
+                    AND NOT EXISTS (
+                        SELECT 1
+                        FROM unnest({extracted_value}) AS t(elem)
+                        WHERE elem::TEXT != {value_json} OR elem IS NULL
+                    )
+                """
+        else:
+            # Single value path: check if the value matches
+            if value is None:
+                # Check if the value is NOT null (either SQL NULL or JSON null string 'null')
+                requirement_sql = f"""
+                WITH invalid AS (
+                    SELECT 1
+                    FROM {{table_name}}
+                    WHERE {col} IS NOT NULL
+                        AND json_valid({col}::TEXT)
+                        AND {extracted_value} IS NOT NULL
+                        AND {extracted_value}::TEXT != 'null'
+                )
+                SELECT
+                    COUNT(*) AS violations,
+                    CASE WHEN COUNT(*) > 0 THEN '{msg_sql}' END AS error_message
+                FROM invalid
+                """
+
+                predicate_sql = f"""
+                    {col} IS NOT NULL
+                    AND json_valid({col}::TEXT)
+                    AND ({extracted_value} IS NULL OR {extracted_value}::TEXT = 'null')
+                """
+            else:
+                requirement_sql = f"""
+                WITH invalid AS (
+                    SELECT 1
+                    FROM {{table_name}}
+                    WHERE {col} IS NOT NULL
+                        AND json_valid({col}::TEXT)
+                        AND ({extracted_value} IS NULL OR {extracted_value}::TEXT != {value_json})
+                )
+                SELECT
+                    COUNT(*) AS violations,
+                    CASE WHEN COUNT(*) > 0 THEN '{msg_sql}' END AS error_message
+                FROM invalid
+                """
+
+                predicate_sql = f"""
+                    {col} IS NOT NULL
+                    AND json_valid({col}::TEXT)
+                    AND {extracted_value} IS NOT NULL
+                    AND {extracted_value}::TEXT = {value_json}
+                """
+
+        return SQLQuery(
+            requirement_sql=requirement_sql.strip(), predicate_sql=predicate_sql.strip()
+        )
+
+    def getCheckType(self) -> str:
+        return "json_path_value"
+
+
+class JSONCheckPathNotValueGenerator(DuckDBCheckGenerator):
+    """
+    JSONCheckPathNotValue check generator.
+    REQUIRED_KEYS = {"ColumnName", "Path", "Value"}
+    Validates that element(s) at a JSON path do NOT have a specific value.
+    """
+
+    REQUIRED_KEYS = {"ColumnName", "Path", "Value"}
+
+    def generateSql(self) -> SQLQuery:
+        """Generate SQL for JSON path NOT value check"""
+        col = self.params.ColumnName
+        path = self.params.Path
+        value = self.params.Value
+
+        # Escape path for SQL
+        path_escaped = path.replace("'", "''")
+
+        # Build error message
+        msg = f"{col} at path '{path}' MUST NOT equal {value}"
+        msg_sql = msg.replace("'", "''")
+
+        # Check if this is an array path (contains [*])
+        is_array_path = "[*]" in path
+
+        # Format value for SQL comparison
+        if value is None:
+            value_json = "NULL"
+        elif isinstance(value, bool):
+            value_json = f"'{str(value).lower()}'"  # JSON uses lowercase true/false
+        elif isinstance(value, (int, float)):
+            value_json = str(value)
+        else:
+            # String value - escape for SQL
+            value_escaped = str(value).replace("'", "''")
+            # For JSON comparison, strings are quoted
+            value_json = f"'\"{value_escaped}\"'"
+
+        # Extract the value at the path
+        extracted_value = f"json_extract(TRY_CAST({col} AS JSON), '{path_escaped}')"
+
+        if is_array_path:
+            # Array path: check if ANY element equals the value (violation)
+            if value is None:
+                # Check if any element IS null (SQL NULL or JSON null string 'null')
+                requirement_sql = f"""
+                WITH invalid AS (
+                    SELECT 1
+                    FROM {{table_name}}
+                    WHERE {col} IS NOT NULL
+                        AND json_valid({col}::TEXT)
+                        AND {extracted_value} IS NOT NULL
+                        AND json_array_length({extracted_value}) > 0
+                        AND EXISTS (
+                            SELECT 1
+                            FROM unnest({extracted_value}) AS t(elem)
+                            WHERE elem IS NULL OR elem::TEXT = 'null'
+                        )
+                )
+                SELECT
+                    COUNT(*) AS violations,
+                    CASE WHEN COUNT(*) > 0 THEN '{msg_sql}' END AS error_message
+                FROM invalid
+                """
+
+                predicate_sql = f"""
+                    {col} IS NOT NULL
+                    AND json_valid({col}::TEXT)
+                    AND {extracted_value} IS NOT NULL
+                    AND json_array_length({extracted_value}) > 0
+                    AND NOT EXISTS (
+                        SELECT 1
+                        FROM unnest({extracted_value}) AS t(elem)
+                        WHERE elem IS NULL OR elem::TEXT = 'null'
+                    )
+                """
+            else:
+                # For non-null checks, check if any element equals the value
+                requirement_sql = f"""
+                WITH invalid AS (
+                    SELECT 1
+                    FROM {{table_name}}
+                    WHERE {col} IS NOT NULL
+                        AND json_valid({col}::TEXT)
+                        AND {extracted_value} IS NOT NULL
+                        AND json_array_length({extracted_value}) > 0
+                        AND EXISTS (
+                            SELECT 1
+                            FROM unnest({extracted_value}) AS t(elem)
+                            WHERE elem::TEXT = {value_json}
+                        )
+                )
+                SELECT
+                    COUNT(*) AS violations,
+                    CASE WHEN COUNT(*) > 0 THEN '{msg_sql}' END AS error_message
+                FROM invalid
+                """
+
+                predicate_sql = f"""
+                    {col} IS NOT NULL
+                    AND json_valid({col}::TEXT)
+                    AND {extracted_value} IS NOT NULL
+                    AND json_array_length({extracted_value}) > 0
+                    AND NOT EXISTS (
+                        SELECT 1
+                        FROM unnest({extracted_value}) AS t(elem)
+                        WHERE elem::TEXT = {value_json}
+                    )
+                """
+        else:
+            # Single value path: check if the value equals the specified value (violation)
+            if value is None:
+                # Check if the value IS null (JSON null string 'null', not missing path)
+                # Only check rows where the path exists (not SQL NULL)
+                requirement_sql = f"""
+                WITH invalid AS (
+                    SELECT 1
+                    FROM {{table_name}}
+                    WHERE {col} IS NOT NULL
+                        AND json_valid({col}::TEXT)
+                        AND {extracted_value} IS NOT NULL
+                        AND {extracted_value}::TEXT = 'null'
+                )
+                SELECT
+                    COUNT(*) AS violations,
+                    CASE WHEN COUNT(*) > 0 THEN '{msg_sql}' END AS error_message
+                FROM invalid
+                """
+
+                predicate_sql = f"""
+                    {col} IS NOT NULL
+                    AND json_valid({col}::TEXT)
+                    AND ({extracted_value} IS NULL OR {extracted_value}::TEXT != 'null')
+                """
+            else:
+                requirement_sql = f"""
+                WITH invalid AS (
+                    SELECT 1
+                    FROM {{table_name}}
+                    WHERE {col} IS NOT NULL
+                        AND json_valid({col}::TEXT)
+                        AND {extracted_value} IS NOT NULL
+                        AND {extracted_value}::TEXT = {value_json}
+                )
+                SELECT
+                    COUNT(*) AS violations,
+                    CASE WHEN COUNT(*) > 0 THEN '{msg_sql}' END AS error_message
+                FROM invalid
+                """
+
+                predicate_sql = f"""
+                    {col} IS NOT NULL
+                    AND json_valid({col}::TEXT)
+                    AND ({extracted_value} IS NULL OR {extracted_value}::TEXT != {value_json})
+                """
+
+        return SQLQuery(
+            requirement_sql=requirement_sql.strip(), predicate_sql=predicate_sql.strip()
+        )
+
+    def getCheckType(self) -> str:
+        return "json_path_not_value"
+
+
+class JSONCheckPathSameValueGenerator(DuckDBCheckGenerator):
+    """
+    JSONCheckPathSameValue check generator.
+    REQUIRED_KEYS = {"ColumnAName", "PathA", "ColumnBName", "PathB"}
+    Validates that element(s) at PathA in ColumnA have the same value as:
+    - ColumnB at PathB (if PathB is not null)
+    - ColumnB directly (if PathB is null)
+    """
+
+    REQUIRED_KEYS = {"ColumnAName", "PathA", "ColumnBName", "PathB"}
+
+    def generateSql(self) -> SQLQuery:
+        """Generate SQL for JSON path same value check"""
+        col_a = self.params.ColumnAName
+        path_a = self.params.PathA
+        col_b = self.params.ColumnBName
+        path_b = self.params.PathB
+
+        # Escape paths for SQL
+        path_a_escaped = path_a.replace("'", "''")
+        path_b_escaped = path_b.replace("'", "''") if path_b else None
+
+        # Build error message
+        if path_b:
+            msg = f"{col_a} at path '{path_a}' MUST equal {col_b} at path '{path_b}'"
+        else:
+            msg = f"{col_a} at path '{path_a}' MUST equal {col_b}"
+        msg_sql = msg.replace("'", "''")
+
+        # Check if paths are array paths
+        is_array_path_a = "[*]" in path_a
+        is_array_path_b = "[*]" in path_b if path_b else False
+
+        # Extract values
+        extracted_a = f"json_extract(TRY_CAST({col_a} AS JSON), '{path_a_escaped}')"
+
+        if path_b:
+            extracted_b = f"json_extract(TRY_CAST({col_b} AS JSON), '{path_b_escaped}')"
+        else:
+            # Compare to column value directly
+            extracted_b = col_b
+
+        # Generate SQL based on path types
+        if is_array_path_a and is_array_path_b:
+            # Both arrays: check if arrays are equal element by element
+            # This is complex - we need to compare array lengths and each element
+            requirement_sql = f"""
+            WITH invalid AS (
+                SELECT 1
+                FROM {{table_name}}
+                WHERE {col_a} IS NOT NULL
+                    AND {col_b} IS NOT NULL
+                    AND json_valid({col_a}::TEXT)
+                    AND json_valid({col_b}::TEXT)
+                    AND {extracted_a} IS NOT NULL
+                    AND {extracted_b} IS NOT NULL
+                    AND (
+                        json_array_length({extracted_a}) != json_array_length({extracted_b})
+                        OR EXISTS (
+                            SELECT 1
+                            FROM unnest({extracted_a}) WITH ORDINALITY AS a(elem_a, idx)
+                            JOIN unnest({extracted_b}) WITH ORDINALITY AS b(elem_b, idx)
+                                ON a.idx = b.idx
+                            WHERE a.elem_a::TEXT != b.elem_b::TEXT
+                                OR (a.elem_a IS NULL AND b.elem_b IS NOT NULL)
+                                OR (a.elem_a IS NOT NULL AND b.elem_b IS NULL)
+                        )
+                    )
+            )
+            SELECT
+                COUNT(*) AS violations,
+                CASE WHEN COUNT(*) > 0 THEN '{msg_sql}' END AS error_message
+            FROM invalid
+            """
+
+            predicate_sql = f"""
+                {col_a} IS NOT NULL
+                AND {col_b} IS NOT NULL
+                AND json_valid({col_a}::TEXT)
+                AND json_valid({col_b}::TEXT)
+                AND {extracted_a} IS NOT NULL
+                AND {extracted_b} IS NOT NULL
+                AND json_array_length({extracted_a}) = json_array_length({extracted_b})
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM unnest({extracted_a}) WITH ORDINALITY AS a(elem_a, idx)
+                    JOIN unnest({extracted_b}) WITH ORDINALITY AS b(elem_b, idx)
+                        ON a.idx = b.idx
+                    WHERE a.elem_a::TEXT != b.elem_b::TEXT
+                        OR (a.elem_a IS NULL AND b.elem_b IS NOT NULL)
+                        OR (a.elem_a IS NOT NULL AND b.elem_b IS NULL)
+                )
+            """
+
+        elif is_array_path_a and not is_array_path_b:
+            # Array A, single B: check if all elements of A equal B
+            if path_b:
+                # B is a JSON path (single value)
+                requirement_sql = f"""
+                WITH invalid AS (
+                    SELECT 1
+                    FROM {{table_name}}
+                    WHERE {col_a} IS NOT NULL
+                        AND {col_b} IS NOT NULL
+                        AND json_valid({col_a}::TEXT)
+                        AND json_valid({col_b}::TEXT)
+                        AND {extracted_a} IS NOT NULL
+                        AND {extracted_b} IS NOT NULL
+                        AND json_array_length({extracted_a}) > 0
+                        AND EXISTS (
+                            SELECT 1
+                            FROM unnest({extracted_a}) AS t(elem)
+                            WHERE elem::TEXT != {extracted_b}::TEXT
+                                OR (elem IS NULL AND {extracted_b} IS NOT NULL)
+                                OR (elem IS NOT NULL AND {extracted_b} IS NULL)
+                        )
+                )
+                SELECT
+                    COUNT(*) AS violations,
+                    CASE WHEN COUNT(*) > 0 THEN '{msg_sql}' END AS error_message
+                FROM invalid
+                """
+
+                predicate_sql = f"""
+                    {col_a} IS NOT NULL
+                    AND {col_b} IS NOT NULL
+                    AND json_valid({col_a}::TEXT)
+                    AND json_valid({col_b}::TEXT)
+                    AND {extracted_a} IS NOT NULL
+                    AND {extracted_b} IS NOT NULL
+                    AND json_array_length({extracted_a}) > 0
+                    AND NOT EXISTS (
+                        SELECT 1
+                        FROM unnest({extracted_a}) AS t(elem)
+                        WHERE elem::TEXT != {extracted_b}::TEXT
+                            OR (elem IS NULL AND {extracted_b} IS NOT NULL)
+                            OR (elem IS NOT NULL AND {extracted_b} IS NULL)
+                    )
+                """
+            else:
+                # B is a column value directly
+                # Note: JSON strings are quoted, so we need to quote col_b for comparison
+                requirement_sql = f"""
+                WITH invalid AS (
+                    SELECT 1
+                    FROM {{table_name}}
+                    WHERE {col_a} IS NOT NULL
+                        AND {col_b} IS NOT NULL
+                        AND json_valid({col_a}::TEXT)
+                        AND {extracted_a} IS NOT NULL
+                        AND json_array_length({extracted_a}) > 0
+                        AND EXISTS (
+                            SELECT 1
+                            FROM unnest({extracted_a}) AS t(elem)
+                            WHERE elem::TEXT != ('"' || {col_b}::TEXT || '"')
+                                OR (elem IS NULL AND {col_b} IS NOT NULL)
+                                OR (elem IS NOT NULL AND {col_b} IS NULL)
+                        )
+                )
+                SELECT
+                    COUNT(*) AS violations,
+                    CASE WHEN COUNT(*) > 0 THEN '{msg_sql}' END AS error_message
+                FROM invalid
+                """
+
+                predicate_sql = f"""
+                    {col_a} IS NOT NULL
+                    AND {col_b} IS NOT NULL
+                    AND json_valid({col_a}::TEXT)
+                    AND {extracted_a} IS NOT NULL
+                    AND json_array_length({extracted_a}) > 0
+                    AND NOT EXISTS (
+                        SELECT 1
+                        FROM unnest({extracted_a}) AS t(elem)
+                        WHERE elem::TEXT != ('"' || {col_b}::TEXT || '"')
+                            OR (elem IS NULL AND {col_b} IS NOT NULL)
+                            OR (elem IS NOT NULL AND {col_b} IS NULL)
+                    )
+                """
+
+        elif not is_array_path_a and is_array_path_b:
+            # Single A, array B: check if A equals all elements of B
+            requirement_sql = f"""
+            WITH invalid AS (
+                SELECT 1
+                FROM {{table_name}}
+                WHERE {col_a} IS NOT NULL
+                    AND {col_b} IS NOT NULL
+                    AND json_valid({col_a}::TEXT)
+                    AND json_valid({col_b}::TEXT)
+                    AND {extracted_a} IS NOT NULL
+                    AND {extracted_b} IS NOT NULL
+                    AND json_array_length({extracted_b}) > 0
+                    AND EXISTS (
+                        SELECT 1
+                        FROM unnest({extracted_b}) AS t(elem)
+                        WHERE elem::TEXT != {extracted_a}::TEXT
+                            OR (elem IS NULL AND {extracted_a} IS NOT NULL)
+                            OR (elem IS NOT NULL AND {extracted_a} IS NULL)
+                    )
+            )
+            SELECT
+                COUNT(*) AS violations,
+                CASE WHEN COUNT(*) > 0 THEN '{msg_sql}' END AS error_message
+            FROM invalid
+            """
+
+            predicate_sql = f"""
+                {col_a} IS NOT NULL
+                AND {col_b} IS NOT NULL
+                AND json_valid({col_a}::TEXT)
+                AND json_valid({col_b}::TEXT)
+                AND {extracted_a} IS NOT NULL
+                AND {extracted_b} IS NOT NULL
+                AND json_array_length({extracted_b}) > 0
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM unnest({extracted_b}) AS t(elem)
+                    WHERE elem::TEXT != {extracted_a}::TEXT
+                        OR (elem IS NULL AND {extracted_a} IS NOT NULL)
+                        OR (elem IS NOT NULL AND {extracted_a} IS NULL)
+                )
+            """
+
+        else:
+            # Both single values: direct comparison
+            if path_b:
+                # B is a JSON path
+                requirement_sql = f"""
+                WITH invalid AS (
+                    SELECT 1
+                    FROM {{table_name}}
+                    WHERE {col_a} IS NOT NULL
+                        AND {col_b} IS NOT NULL
+                        AND json_valid({col_a}::TEXT)
+                        AND json_valid({col_b}::TEXT)
+                        AND ({extracted_a} IS NOT NULL OR {extracted_b} IS NOT NULL)
+                        AND (
+                            ({extracted_a} IS NULL AND {extracted_b} IS NOT NULL)
+                            OR ({extracted_a} IS NOT NULL AND {extracted_b} IS NULL)
+                            OR {extracted_a}::TEXT != {extracted_b}::TEXT
+                        )
+                )
+                SELECT
+                    COUNT(*) AS violations,
+                    CASE WHEN COUNT(*) > 0 THEN '{msg_sql}' END AS error_message
+                FROM invalid
+                """
+
+                predicate_sql = f"""
+                    {col_a} IS NOT NULL
+                    AND {col_b} IS NOT NULL
+                    AND json_valid({col_a}::TEXT)
+                    AND json_valid({col_b}::TEXT)
+                    AND (
+                        ({extracted_a} IS NULL AND {extracted_b} IS NULL)
+                        OR ({extracted_a} IS NOT NULL AND {extracted_b} IS NOT NULL
+                            AND {extracted_a}::TEXT = {extracted_b}::TEXT)
+                    )
+                """
+            else:
+                # B is a column value directly
+                # Note: JSON strings are quoted, so we need to quote col_b for comparison
+                requirement_sql = f"""
+                WITH invalid AS (
+                    SELECT 1
+                    FROM {{table_name}}
+                    WHERE {col_a} IS NOT NULL
+                        AND {col_b} IS NOT NULL
+                        AND json_valid({col_a}::TEXT)
+                        AND {extracted_a} IS NOT NULL
+                        AND {extracted_a}::TEXT != ('"' || {col_b}::TEXT || '"')
+                )
+                SELECT
+                    COUNT(*) AS violations,
+                    CASE WHEN COUNT(*) > 0 THEN '{msg_sql}' END AS error_message
+                FROM invalid
+                """
+
+                predicate_sql = f"""
+                    {col_a} IS NOT NULL
+                    AND {col_b} IS NOT NULL
+                    AND json_valid({col_a}::TEXT)
+                    AND {extracted_a} IS NOT NULL
+                    AND {extracted_a}::TEXT = ('"' || {col_b}::TEXT || '"')
+                """
+
+        return SQLQuery(
+            requirement_sql=requirement_sql.strip(), predicate_sql=predicate_sql.strip()
+        )
+
+    def getCheckType(self) -> str:
+        return "json_path_same_value"
+
+
+class JSONCheckPathNumericFormatGenerator(DuckDBCheckGenerator):
+    """
+    Validates that element(s) at JSON path meet numeric format requirements.
+
+    Arguments:
+    - ColumnName: The column containing JSON data
+    - Path: JSONPath expression to extract element(s)
+
+    Validation:
+    - Checks that extracted values match numeric pattern: ^[+-]?([0-9]*[.])?[0-9]+([eE][+-]?[0-9]+)?$
+    - Supports both array paths (with [*]) and single value paths
+    - Only validates non-null JSON values
+    """
+
+    REQUIRED_KEYS = {"ColumnName", "Path"}
+
+    def generateSql(self) -> SQLQuery:
+        col = self.params.ColumnName
+        path = self.params.Path
+        keyword = self._get_validation_keyword()
+        message = (
+            self.errorMessage
+            or f"{col} at path {path} {keyword} contain numeric values (optional +/- sign, optional decimal, optional scientific notation)."
+        )
+        msg_sql = message.replace("'", "''")
+
+        # Determine if this is an array path or single value path
+        is_array_path = "[*]" in path
+
+        # Numeric pattern: supports 123, -123, 1.23, -1.23, 1.23e10, 1.23e-10, 1.23E+10, etc.
+        numeric_pattern = r"^[+-]?([0-9]*[.])?[0-9]+([eE][+-]?[0-9]+)?$"
+
+        if is_array_path:
+            # Array path: Check if ANY element violates the numeric format
+            # Only check elements that exist and are not JSON null
+            requirement_sql = f"""
+            WITH violations AS (
+                SELECT
+                    {col}
+                FROM {{{{table_name}}}}
+                WHERE {col} IS NOT NULL
+                  AND json_valid({col}::TEXT)
+                  AND EXISTS (
+                      SELECT 1
+                      FROM unnest(json_extract({col}::TEXT, '{path}')) AS t(elem)
+                      WHERE elem IS NOT NULL
+                        AND elem::TEXT != 'null'
+                        AND NOT (TRIM(elem::TEXT, '"') ~ '{numeric_pattern}')
+                  )
+            )
+            SELECT
+                COUNT(*) AS violations,
+                CASE WHEN COUNT(*) > 0 THEN '{msg_sql}' END AS error_message
+            FROM violations
+            """
+
+            # Predicate: All elements must be valid numeric format
+            predicate_sql = f"""
+            {col} IS NULL
+            OR NOT json_valid({col}::TEXT)
+            OR NOT EXISTS (
+                SELECT 1
+                FROM unnest(json_extract({col}::TEXT, '{path}')) AS t(elem)
+                WHERE elem IS NOT NULL
+                  AND elem::TEXT != 'null'
+                  AND NOT (TRIM(elem::TEXT, '"') ~ '{numeric_pattern}')
+            )
+            """
+        else:
+            # Single value path: Check if the value violates the numeric format
+            # Only check if the value exists and is not JSON null
+            requirement_sql = f"""
+            WITH violations AS (
+                SELECT
+                    {col}
+                FROM {{{{table_name}}}}
+                WHERE {col} IS NOT NULL
+                  AND json_valid({col}::TEXT)
+                  AND json_extract({col}::TEXT, '{path}') IS NOT NULL
+                  AND json_extract({col}::TEXT, '{path}')::TEXT != 'null'
+                  AND NOT (TRIM(json_extract({col}::TEXT, '{path}')::TEXT, '"') ~ '{numeric_pattern}')
+            )
+            SELECT
+                COUNT(*) AS violations,
+                CASE WHEN COUNT(*) > 0 THEN '{msg_sql}' END AS error_message
+            FROM violations
+            """
+
+            # Predicate: Value must be valid numeric format
+            predicate_sql = f"""
+            {col} IS NULL
+            OR NOT json_valid({col}::TEXT)
+            OR json_extract({col}::TEXT, '{path}') IS NULL
+            OR json_extract({col}::TEXT, '{path}')::TEXT = 'null'
+            OR (TRIM(json_extract({col}::TEXT, '{path}')::TEXT, '"') ~ '{numeric_pattern}')
+            """
+
+        return SQLQuery(
+            requirement_sql=requirement_sql.strip(), predicate_sql=predicate_sql.strip()
+        )
+
+    def getCheckType(self) -> str:
+        return "json_path_numeric_format"
+
+
+class JSONCheckPathUnitFormatGenerator(DuckDBCheckGenerator):
+    """
+    Validates that element(s) at JSON path meet unit format requirements.
+
+    Arguments:
+    - ColumnName: The column containing JSON data
+    - Path: JSONPath expression to extract element(s)
+
+    Validation:
+    - Checks that extracted values match FOCUS unit format patterns
+    - Supports both array paths (with [*]) and single value paths
+    - Only validates non-null JSON values
+    """
+
+    REQUIRED_KEYS = {"ColumnName", "Path"}
+
+    def _generate_unit_format_regex(self) -> str:
+        """
+        Generate the complete regex pattern for FOCUS Unit Format validation.
+        This is identical to FormatUnitGenerator's method.
+        """
+        # Data Size Unit Names (both decimal and binary)
+        data_size_units = [
+            # Bits (decimal)
+            "b",
+            "Kb",
+            "Mb",
+            "Gb",
+            "Tb",
+            "Pb",
+            "Eb",
+            # Bytes (decimal)
+            "B",
+            "KB",
+            "MB",
+            "GB",
+            "TB",
+            "PB",
+            "EB",
+            # Bits (binary)
+            "Kib",
+            "Mib",
+            "Gib",
+            "Tib",
+            "Pib",
+            "Eib",
+            # Bytes (binary)
+            "KiB",
+            "MiB",
+            "GiB",
+            "TiB",
+            "PiB",
+            "EiB",
+        ]
+
+        # Time-based Unit Names
+        time_units_singular = ["Year", "Month", "Day", "Hour", "Minute", "Second"]
+        time_units_plural = ["Years", "Months", "Days", "Hours", "Minutes", "Seconds"]
+
+        # Build regex patterns
+        patterns = []
+        data_size_pattern = "|".join(data_size_units)
+        time_singular_pattern = "|".join(time_units_singular)
+        time_plural_pattern = "|".join(time_units_plural)
+        count_unit_pattern = r"[A-Za-z][A-Za-z0-9]*(?:\s+[A-Za-z][A-Za-z0-9]*)*"
+
+        # Pattern 1: Standalone units
+        patterns.append(
+            f"^({data_size_pattern}|{time_singular_pattern}|{time_plural_pattern}|{count_unit_pattern})$"
+        )
+        # Pattern 2: <unit>-<plural-time-units>
+        patterns.append(
+            f"^({data_size_pattern}|{count_unit_pattern})-({time_plural_pattern})$"
+        )
+        # Pattern 3: <unit>/<singular-time-unit>
+        patterns.append(
+            f"^({data_size_pattern}|{count_unit_pattern}|{time_plural_pattern})/({time_singular_pattern})$"
+        )
+        # Pattern 4: <quantity> <units>
+        patterns.append(
+            f"^[0-9]+ ({data_size_pattern}|{time_singular_pattern}|{time_plural_pattern}|{count_unit_pattern})$"
+        )
+        # Pattern 5: <units>/<interval> <plural-time-units>
+        patterns.append(
+            f"^({data_size_pattern}|{count_unit_pattern}|{time_plural_pattern})/[0-9]+ ({time_plural_pattern})$"
+        )
+
+        # Combine all patterns with OR
+        return "|".join(f"({pattern})" for pattern in patterns)
+
+    def generateSql(self) -> SQLQuery:
+        col = self.params.ColumnName
+        path = self.params.Path
+        keyword = self._get_validation_keyword()
+        message = (
+            self.errorMessage
+            or f"{col} at path {path} {keyword} follow the FOCUS Unit Format specification."
+        )
+        msg_sql = message.replace("'", "''")
+
+        # Get the combined regex pattern
+        combined_pattern = self._generate_unit_format_regex()
+
+        # Determine if this is an array path or single value path
+        is_array_path = "[*]" in path
+
+        if is_array_path:
+            # Array path: Check if ANY element violates the unit format
+            # Only check elements that exist and are not JSON null
+            requirement_sql = f"""
+            WITH violations AS (
+                SELECT
+                    {col}
+                FROM {{{{table_name}}}}
+                WHERE {col} IS NOT NULL
+                  AND json_valid({col}::TEXT)
+                  AND EXISTS (
+                      SELECT 1
+                      FROM unnest(json_extract({col}::TEXT, '{path}')) AS t(elem)
+                      WHERE elem IS NOT NULL
+                        AND elem::TEXT != 'null'
+                        AND NOT regexp_matches(TRIM(elem::TEXT, '"'), '{combined_pattern}')
+                  )
+            )
+            SELECT
+                COUNT(*) AS violations,
+                CASE WHEN COUNT(*) > 0 THEN '{msg_sql}' END AS error_message
+            FROM violations
+            """
+
+            # Predicate: All elements must match unit format
+            predicate_sql = f"""
+            {col} IS NULL
+            OR NOT json_valid({col}::TEXT)
+            OR NOT EXISTS (
+                SELECT 1
+                FROM unnest(json_extract({col}::TEXT, '{path}')) AS t(elem)
+                WHERE elem IS NOT NULL
+                  AND elem::TEXT != 'null'
+                  AND NOT regexp_matches(TRIM(elem::TEXT, '"'), '{combined_pattern}')
+            )
+            """
+        else:
+            # Single value path: Check if the value violates the unit format
+            # Only check if the value exists and is not JSON null
+            requirement_sql = f"""
+            WITH violations AS (
+                SELECT
+                    {col}
+                FROM {{{{table_name}}}}
+                WHERE {col} IS NOT NULL
+                  AND json_valid({col}::TEXT)
+                  AND json_extract({col}::TEXT, '{path}') IS NOT NULL
+                  AND json_extract({col}::TEXT, '{path}')::TEXT != 'null'
+                  AND NOT regexp_matches(TRIM(json_extract({col}::TEXT, '{path}')::TEXT, '"'), '{combined_pattern}')
+            )
+            SELECT
+                COUNT(*) AS violations,
+                CASE WHEN COUNT(*) > 0 THEN '{msg_sql}' END AS error_message
+            FROM violations
+            """
+
+            # Predicate: Value must match unit format
+            predicate_sql = f"""
+            {col} IS NULL
+            OR NOT json_valid({col}::TEXT)
+            OR json_extract({col}::TEXT, '{path}') IS NULL
+            OR json_extract({col}::TEXT, '{path}')::TEXT = 'null'
+            OR regexp_matches(TRIM(json_extract({col}::TEXT, '{path}')::TEXT, '"'), '{combined_pattern}')
+            """
+
+        return SQLQuery(
+            requirement_sql=requirement_sql.strip(), predicate_sql=predicate_sql.strip()
+        )
+
+    def getCheckType(self) -> str:
+        return "json_path_unit_format"
+
+
+class JSONCheckPathDistinctParentGenerator(DuckDBCheckGenerator):
+    """
+    Validates that distinct count of child elements equals expected count.
+
+    Arguments:
+    - ColumnName: The column containing JSON data
+    - ParentPath: JSONPath to parent elements (typically with [*])
+    - ChildPath: JSONPath relative to parent to extract child values
+    - ExpectedCount: Expected number of distinct child values
+
+    Validation:
+    - Extracts parent elements using ParentPath
+    - For each parent, extracts child value using ChildPath
+    - Counts distinct non-null child values
+    - Checks if distinct count equals ExpectedCount
+    """
+
+    REQUIRED_KEYS = {"ColumnName", "ParentPath", "ChildPath", "ExpectedCount"}
+
+    def generateSql(self) -> SQLQuery:
+        col = self.params.ColumnName
+        parent_path = self.params.ParentPath
+        child_path = self.params.ChildPath
+        expected_count = self.params.ExpectedCount
+        keyword = self._get_validation_keyword()
+        message = (
+            self.errorMessage
+            or f"{col} at parent path {parent_path} {keyword} have exactly {expected_count} distinct values for child path {child_path}."
+        )
+        msg_sql = message.replace("'", "''")
+
+        # Build the validation query
+        # For each row, extract parent elements, then extract child values, count distinct
+        # Child path format: if it starts with $, use it directly; otherwise prepend $. to make it a path
+        if child_path.startswith("$."):
+            full_child_path = child_path
+        elif child_path.startswith("$"):
+            full_child_path = child_path
+        else:
+            # Assume it's a simple key name, make it a path
+            full_child_path = f"$.{child_path}"
+
+        requirement_sql = f"""
+        WITH row_distinct_counts AS (
+            SELECT
+                {col},
+                (
+                    SELECT COUNT(DISTINCT child_value)
+                    FROM (
+                        SELECT json_extract(parent_elem::TEXT, '{full_child_path}') AS child_value
+                        FROM unnest(json_extract({col}::TEXT, '{parent_path}')) AS t(parent_elem)
+                        WHERE parent_elem IS NOT NULL
+                          AND parent_elem::TEXT != 'null'
+                          AND json_extract(parent_elem::TEXT, '{full_child_path}') IS NOT NULL
+                          AND json_extract(parent_elem::TEXT, '{full_child_path}')::TEXT != 'null'
+                    ) child_values
+                ) AS distinct_count
+            FROM {{{{table_name}}}}
+            WHERE {col} IS NOT NULL
+              AND json_valid({col}::TEXT)
+              AND json_array_length(json_extract({col}::TEXT, '{parent_path}')) > 0
+        ),
+        violations AS (
+            SELECT {col}
+            FROM row_distinct_counts
+            WHERE distinct_count != {expected_count}
+        )
+        SELECT
+            COUNT(*) AS violations,
+            CASE WHEN COUNT(*) > 0 THEN '{msg_sql}' END AS error_message
+        FROM violations
+        """
+
+        # Predicate: distinct count must equal expected count
+        predicate_sql = f"""
+        {col} IS NULL
+        OR NOT json_valid({col}::TEXT)
+        OR (
+            SELECT COUNT(DISTINCT child_value)
+            FROM (
+                SELECT json_extract(parent_elem::TEXT, '{full_child_path}') AS child_value
+                FROM unnest(json_extract({col}::TEXT, '{parent_path}')) AS t(parent_elem)
+                WHERE parent_elem IS NOT NULL
+                  AND parent_elem::TEXT != 'null'
+                  AND json_extract(parent_elem::TEXT, '{full_child_path}') IS NOT NULL
+                  AND json_extract(parent_elem::TEXT, '{full_child_path}')::TEXT != 'null'
+            ) child_values
+        ) = {expected_count}
+        """
+
+        return SQLQuery(
+            requirement_sql=requirement_sql.strip(), predicate_sql=predicate_sql.strip()
+        )
+
+    def getCheckType(self) -> str:
+        return "json_path_distinct_parent"
+
+
+class FormatJSONFormatGenerator(DuckDBCheckGenerator):
+    """
+    Validates that element(s) at JSON path meet JSON format requirements.
+
+    Arguments:
+    - ColumnName: The column containing JSON data
+    - Path: JSONPath expression to extract element(s) (optional - if not provided, validates entire column)
+
+    Validation:
+    - Checks that extracted values are valid JSON
+    - Supports both array paths (with [*]) and single value paths
+    - If Path is not provided, validates the entire column value as valid JSON
+    - Only validates non-null JSON values
+    - Validates that the extracted element is itself valid JSON
+    """
+
+    REQUIRED_KEYS = {"ColumnName"}
+
+    def generateSql(self) -> SQLQuery:
+        col = self.params.ColumnName
+        path = getattr(self.params, "Path", None)
+        keyword = self._get_validation_keyword()
+
+        # If no path provided, validate the entire column
+        if not path:
+            message = self.errorMessage or f"{col} {keyword} contain valid JSON format."
+            msg_sql = message.replace("'", "''")
+
+            requirement_sql = f"""
+            WITH violations AS (
+                SELECT
+                    {col}
+                FROM {{{{table_name}}}}
+                WHERE {col} IS NOT NULL
+                  AND NOT json_valid({col}::TEXT)
+            )
+            SELECT
+                COUNT(*) AS violations,
+                CASE WHEN COUNT(*) > 0 THEN '{msg_sql}' END AS error_message
+            FROM violations
+            """
+
+            predicate_sql = f"""
+            {col} IS NULL
+            OR json_valid({col}::TEXT)
+            """
+
+            return SQLQuery(
+                requirement_sql=requirement_sql.strip(),
+                predicate_sql=predicate_sql.strip(),
+            )
+
+        # Path provided - validate elements at that path
+        message = (
+            self.errorMessage
+            or f"{col} at path {path} {keyword} contain valid JSON format."
+        )
+        msg_sql = message.replace("'", "''")
+
+        # Determine if this is an array path or single value path
+        is_array_path = "[*]" in path
+
+        if is_array_path:
+            # Array path: Check if ANY element is not valid JSON
+            # Only check elements that exist and are not JSON null
+            requirement_sql = f"""
+            WITH violations AS (
+                SELECT
+                    {col}
+                FROM {{{{table_name}}}}
+                WHERE {col} IS NOT NULL
+                  AND json_valid({col}::TEXT)
+                  AND EXISTS (
+                      SELECT 1
+                      FROM unnest(json_extract({col}::TEXT, '{path}')) AS t(elem)
+                      WHERE elem IS NOT NULL
+                        AND elem::TEXT != 'null'
+                        AND NOT json_valid(elem::TEXT)
+                  )
+            )
+            SELECT
+                COUNT(*) AS violations,
+                CASE WHEN COUNT(*) > 0 THEN '{msg_sql}' END AS error_message
+            FROM violations
+            """
+
+            # Predicate: All elements must be valid JSON
+            predicate_sql = f"""
+            {col} IS NULL
+            OR NOT json_valid({col}::TEXT)
+            OR NOT EXISTS (
+                SELECT 1
+                FROM unnest(json_extract({col}::TEXT, '{path}')) AS t(elem)
+                WHERE elem IS NOT NULL
+                  AND elem::TEXT != 'null'
+                  AND NOT json_valid(elem::TEXT)
+            )
+            """
+        else:
+            # Single value path: Check if the value is not valid JSON
+            # Only check if the value exists and is not JSON null
+            requirement_sql = f"""
+            WITH violations AS (
+                SELECT
+                    {col}
+                FROM {{{{table_name}}}}
+                WHERE {col} IS NOT NULL
+                  AND json_valid({col}::TEXT)
+                  AND json_extract({col}::TEXT, '{path}') IS NOT NULL
+                  AND json_extract({col}::TEXT, '{path}')::TEXT != 'null'
+                  AND NOT json_valid(json_extract({col}::TEXT, '{path}')::TEXT)
+            )
+            SELECT
+                COUNT(*) AS violations,
+                CASE WHEN COUNT(*) > 0 THEN '{msg_sql}' END AS error_message
+            FROM violations
+            """
+
+            # Predicate: Value must be valid JSON
+            predicate_sql = f"""
+            {col} IS NULL
+            OR NOT json_valid({col}::TEXT)
+            OR json_extract({col}::TEXT, '{path}') IS NULL
+            OR json_extract({col}::TEXT, '{path}')::TEXT = 'null'
+            OR json_valid(json_extract({col}::TEXT, '{path}')::TEXT)
+            """
+
+        return SQLQuery(
+            requirement_sql=requirement_sql.strip(), predicate_sql=predicate_sql.strip()
+        )
+
+    def getCheckType(self) -> str:
+        return "format_json_format"
+
+
+class JSONFormatStringGenerator(DuckDBCheckGenerator):
+    """
+    Check element(s) at JSON path conform to StringHandling requirements (ASCII characters only).
+
+    Arguments:
+        ColumnName: The column containing JSON data
+        Path: JSONPath expression (e.g., "$.name" or "$.items[*].label")
+
+    StringHandling requirements:
+    - Strings must contain only ASCII characters ([\x00-\x7f])
+
+    For array paths (e.g., $.items[*].label), validates ALL string elements.
+    """
+
+    REQUIRED_KEYS = {"ColumnName", "Path"}
+
+    def generateSql(self) -> SQLQuery:
+        col = self.params.ColumnName
+        path = self.params.Path
+        keyword = self._get_validation_keyword()
+
+        # Build error message
+        message = (
+            self.errorMessage
+            or f"{col} at path '{path}' {keyword} contain only ASCII characters"
+        )
+        msg_sql = message.replace("'", "''")
+
+        # Escape single quotes in path for SQL
+        path_escaped = path.replace("'", "''")
+
+        # Determine if this is an array path (contains [*])
+        is_array_path = "[*]" in path
+
+        if is_array_path:
+            # Array path: Check all elements in the array
+            requirement_sql = f"""
+            WITH invalid AS (
+                SELECT 1
+                FROM {{table_name}}
+                WHERE {col} IS NOT NULL
+                    AND json_valid({col}::TEXT)
+                    AND json_array_length(json_extract({col}::TEXT, '{path_escaped}')) > 0
+                    AND EXISTS (
+                        SELECT 1
+                        FROM unnest(json_extract({col}::TEXT, '{path_escaped}')) AS t(elem)
+                        WHERE elem IS NOT NULL
+                            AND elem::TEXT != 'null'
+                            AND NOT (TRIM(elem::TEXT, '"') ~ '^[\\x00-\\x7F]*$')
+                    )
+            )
+            SELECT
+                COUNT(*) AS violations,
+                CASE WHEN COUNT(*) > 0 THEN '{msg_sql}' END AS error_message
+            FROM invalid
+            """
+
+            predicate_sql = f"""
+                {col} IS NOT NULL
+                AND json_valid({col}::TEXT)
+                AND json_array_length(json_extract({col}::TEXT, '{path_escaped}')) > 0
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM unnest(json_extract({col}::TEXT, '{path_escaped}')) AS t(elem)
+                    WHERE elem IS NOT NULL
+                        AND elem::TEXT != 'null'
+                        AND NOT (TRIM(elem::TEXT, '"') ~ '^[\\x00-\\x7F]*$')
+                )
+            """
+        else:
+            # Single value path
+            extracted_value = f"json_extract({col}::TEXT, '{path_escaped}')"
+
+            requirement_sql = f"""
+            WITH invalid AS (
+                SELECT 1
+                FROM {{table_name}}
+                WHERE {col} IS NOT NULL
+                    AND json_valid({col}::TEXT)
+                    AND {extracted_value} IS NOT NULL
+                    AND {extracted_value}::TEXT != 'null'
+                    AND NOT (TRIM({extracted_value}::TEXT, '"') ~ '^[\\x00-\\x7F]*$')
+            )
+            SELECT
+                COUNT(*) AS violations,
+                CASE WHEN COUNT(*) > 0 THEN '{msg_sql}' END AS error_message
+            FROM invalid
+            """
+
+            predicate_sql = f"""
+                {col} IS NOT NULL
+                AND json_valid({col}::TEXT)
+                AND {extracted_value} IS NOT NULL
+                AND {extracted_value}::TEXT != 'null'
+                AND (TRIM({extracted_value}::TEXT, '"') ~ '^[\\x00-\\x7F]*$')
+            """
+
+        return SQLQuery(
+            requirement_sql=requirement_sql.strip(), predicate_sql=predicate_sql.strip()
+        )
+
+    def getCheckType(self) -> str:
+        return "json_format_string"
+
+
+class JSONFormatUnitGenerator(DuckDBCheckGenerator):
+    """
+    Check element(s) at JSON path conform to FOCUS Unit Format requirements.
+
+    Arguments:
+        ColumnName: The column containing JSON data
+        Path: JSONPath expression (e.g., "$.unit" or "$.items[*].unit")
+
+    Unit Format requirements:
+    - Must match one of 5 FOCUS unit format patterns:
+      1. Standalone units (e.g., "GB", "Hours", "Requests")
+      2. unit-time (e.g., "GB-Hours")
+      3. unit/time (e.g., "GB/Hour", "Requests/Second")
+      4. quantity units (e.g., "1000 Requests")
+      5. units/interval (e.g., "Requests/3 Months")
+
+    For array paths (e.g., $.items[*].unit), validates ALL elements.
+    """
+
+    REQUIRED_KEYS = {"ColumnName", "Path"}
+
+    def _generate_unit_format_regex(self) -> str:
+        """
+        Generate the complete regex pattern for FOCUS Unit Format validation.
+        Identical to FormatUnitGenerator and JSONCheckPathUnitFormatGenerator.
+        """
+        # Data Size Unit Names (both decimal and binary)
+        data_size_units = [
+            # Bits (decimal)
+            "b",
+            "Kb",
+            "Mb",
+            "Gb",
+            "Tb",
+            "Pb",
+            "Eb",
+            # Bytes (decimal)
+            "B",
+            "KB",
+            "MB",
+            "GB",
+            "TB",
+            "PB",
+            "EB",
+            # Bits (binary)
+            "Kib",
+            "Mib",
+            "Gib",
+            "Tib",
+            "Pib",
+            "Eib",
+            # Bytes (binary)
+            "KiB",
+            "MiB",
+            "GiB",
+            "TiB",
+            "PiB",
+            "EiB",
+        ]
+
+        # Time-based Unit Names
+        time_units_singular = ["Year", "Month", "Day", "Hour", "Minute", "Second"]
+        time_units_plural = ["Years", "Months", "Days", "Hours", "Minutes", "Seconds"]
+
+        # Build regex patterns
+        patterns = []
+        data_size_pattern = "|".join(data_size_units)
+        time_singular_pattern = "|".join(time_units_singular)
+        time_plural_pattern = "|".join(time_units_plural)
+        count_unit_pattern = r"[A-Za-z][A-Za-z0-9]*(?:\s+[A-Za-z][A-Za-z0-9]*)*"
+
+        # Pattern 1: Standalone units
+        patterns.append(
+            f"^({data_size_pattern}|{time_singular_pattern}|{time_plural_pattern}|{count_unit_pattern})$"
+        )
+        # Pattern 2: <unit>-<plural-time-units>
+        patterns.append(
+            f"^({data_size_pattern}|{count_unit_pattern})-({time_plural_pattern})$"
+        )
+        # Pattern 3: <unit>/<singular-time-unit>
+        patterns.append(
+            f"^({data_size_pattern}|{count_unit_pattern}|{time_plural_pattern})/({time_singular_pattern})$"
+        )
+        # Pattern 4: <quantity> <units>
+        patterns.append(
+            f"^[0-9]+ ({data_size_pattern}|{time_singular_pattern}|{time_plural_pattern}|{count_unit_pattern})$"
+        )
+        # Pattern 5: <units>/<interval> <plural-time-units>
+        patterns.append(
+            f"^({data_size_pattern}|{count_unit_pattern}|{time_plural_pattern})/[0-9]+ ({time_plural_pattern})$"
+        )
+
+        # Combine all patterns with OR
+        return "|".join(f"({pattern})" for pattern in patterns)
+
+    def generateSql(self) -> SQLQuery:
+        col = self.params.ColumnName
+        path = self.params.Path
+        keyword = self._get_validation_keyword()
+
+        # Build error message
+        message = (
+            self.errorMessage
+            or f"{col} at path '{path}' {keyword} follow the FOCUS Unit Format specification"
+        )
+        msg_sql = message.replace("'", "''")
+
+        # Escape single quotes in path for SQL
+        path_escaped = path.replace("'", "''")
+
+        # Get the combined unit format regex pattern
+        combined_pattern = self._generate_unit_format_regex()
+
+        # Determine if this is an array path (contains [*])
+        is_array_path = "[*]" in path
+
+        if is_array_path:
+            # Array path: Check all elements in the array
+            requirement_sql = f"""
+            WITH invalid AS (
+                SELECT 1
+                FROM {{table_name}}
+                WHERE {col} IS NOT NULL
+                    AND json_valid({col}::TEXT)
+                    AND json_array_length(json_extract({col}::TEXT, '{path_escaped}')) > 0
+                    AND EXISTS (
+                        SELECT 1
+                        FROM unnest(json_extract({col}::TEXT, '{path_escaped}')) AS t(elem)
+                        WHERE elem IS NOT NULL
+                            AND elem::TEXT != 'null'
+                            AND NOT regexp_matches(TRIM(elem::TEXT, '"'), '{combined_pattern}')
+                    )
+            )
+            SELECT
+                COUNT(*) AS violations,
+                CASE WHEN COUNT(*) > 0 THEN '{msg_sql}' END AS error_message
+            FROM invalid
+            """
+
+            predicate_sql = f"""
+                {col} IS NOT NULL
+                AND json_valid({col}::TEXT)
+                AND json_array_length(json_extract({col}::TEXT, '{path_escaped}')) > 0
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM unnest(json_extract({col}::TEXT, '{path_escaped}')) AS t(elem)
+                    WHERE elem IS NOT NULL
+                        AND elem::TEXT != 'null'
+                        AND NOT regexp_matches(TRIM(elem::TEXT, '"'), '{combined_pattern}')
+                )
+            """
+        else:
+            # Single value path
+            extracted_value = f"json_extract({col}::TEXT, '{path_escaped}')"
+
+            requirement_sql = f"""
+            WITH invalid AS (
+                SELECT 1
+                FROM {{table_name}}
+                WHERE {col} IS NOT NULL
+                    AND json_valid({col}::TEXT)
+                    AND {extracted_value} IS NOT NULL
+                    AND {extracted_value}::TEXT != 'null'
+                    AND NOT regexp_matches(TRIM({extracted_value}::TEXT, '"'), '{combined_pattern}')
+            )
+            SELECT
+                COUNT(*) AS violations,
+                CASE WHEN COUNT(*) > 0 THEN '{msg_sql}' END AS error_message
+            FROM invalid
+            """
+
+            predicate_sql = f"""
+                {col} IS NOT NULL
+                AND json_valid({col}::TEXT)
+                AND {extracted_value} IS NOT NULL
+                AND {extracted_value}::TEXT != 'null'
+                AND regexp_matches(TRIM({extracted_value}::TEXT, '"'), '{combined_pattern}')
+            """
+
+        return SQLQuery(
+            requirement_sql=requirement_sql.strip(), predicate_sql=predicate_sql.strip()
+        )
+
+    def getCheckType(self) -> str:
+        return "json_format_unit"
+
+
+class JSONFormatNumericGenerator(DuckDBCheckGenerator):
+    """
+    Check element(s) at JSON path conform to Numeric Format requirements.
+
+    Arguments:
+        ColumnName: The column containing JSON data
+        Path: JSONPath expression (e.g., "$.value" or "$.items[*].price")
+
+    Numeric Format requirements:
+    - Optional leading sign (+/-)
+    - Optional decimal point with digits
+    - Required digits
+    - Optional scientific notation (e.g., 1.23e10, 1.23E-5)
+    - Pattern: ^[+-]?([0-9]*[.])?[0-9]+([eE][+-]?[0-9]+)?$
+
+    For array paths (e.g., $.items[*].price), validates ALL elements.
+    """
+
+    REQUIRED_KEYS = {"ColumnName", "Path"}
+
+    def generateSql(self) -> SQLQuery:
+        col = self.params.ColumnName
+        path = self.params.Path
+        keyword = self._get_validation_keyword()
+
+        # Build error message
+        message = (
+            self.errorMessage
+            or f"{col} at path '{path}' {keyword} contain numeric values"
+        )
+        msg_sql = message.replace("'", "''")
+
+        # Escape single quotes in path for SQL
+        path_escaped = path.replace("'", "''")
+
+        # Numeric pattern: supports 123, -123, 1.23, -1.23, 1.23e10, 1.23e-10, 1.23E+10, etc.
+        numeric_pattern = r"^[+-]?([0-9]*[.])?[0-9]+([eE][+-]?[0-9]+)?$"
+
+        # Determine if this is an array path (contains [*])
+        is_array_path = "[*]" in path
+
+        if is_array_path:
+            # Array path: Check all elements in the array
+            requirement_sql = f"""
+            WITH invalid AS (
+                SELECT 1
+                FROM {{table_name}}
+                WHERE {col} IS NOT NULL
+                    AND json_valid({col}::TEXT)
+                    AND json_array_length(json_extract({col}::TEXT, '{path_escaped}')) > 0
+                    AND EXISTS (
+                        SELECT 1
+                        FROM unnest(json_extract({col}::TEXT, '{path_escaped}')) AS t(elem)
+                        WHERE elem IS NOT NULL
+                            AND elem::TEXT != 'null'
+                            AND NOT (TRIM(elem::TEXT, '"') ~ '{numeric_pattern}')
+                    )
+            )
+            SELECT
+                COUNT(*) AS violations,
+                CASE WHEN COUNT(*) > 0 THEN '{msg_sql}' END AS error_message
+            FROM invalid
+            """
+
+            predicate_sql = f"""
+                {col} IS NOT NULL
+                AND json_valid({col}::TEXT)
+                AND json_array_length(json_extract({col}::TEXT, '{path_escaped}')) > 0
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM unnest(json_extract({col}::TEXT, '{path_escaped}')) AS t(elem)
+                    WHERE elem IS NOT NULL
+                        AND elem::TEXT != 'null'
+                        AND NOT (TRIM(elem::TEXT, '"') ~ '{numeric_pattern}')
+                )
+            """
+        else:
+            # Single value path
+            extracted_value = f"json_extract({col}::TEXT, '{path_escaped}')"
+
+            requirement_sql = f"""
+            WITH invalid AS (
+                SELECT 1
+                FROM {{table_name}}
+                WHERE {col} IS NOT NULL
+                    AND json_valid({col}::TEXT)
+                    AND {extracted_value} IS NOT NULL
+                    AND {extracted_value}::TEXT != 'null'
+                    AND NOT (TRIM({extracted_value}::TEXT, '"') ~ '{numeric_pattern}')
+            )
+            SELECT
+                COUNT(*) AS violations,
+                CASE WHEN COUNT(*) > 0 THEN '{msg_sql}' END AS error_message
+            FROM invalid
+            """
+
+            predicate_sql = f"""
+                {col} IS NOT NULL
+                AND json_valid({col}::TEXT)
+                AND {extracted_value} IS NOT NULL
+                AND {extracted_value}::TEXT != 'null'
+                AND (TRIM({extracted_value}::TEXT, '"') ~ '{numeric_pattern}')
+            """
+
+        return SQLQuery(
+            requirement_sql=requirement_sql.strip(), predicate_sql=predicate_sql.strip()
+        )
+
+    def getCheckType(self) -> str:
+        return "json_format_numeric"
+
+
 class CompositeBaseRuleGenerator(DuckDBCheckGenerator):
     """
     Base for AND/OR composites.
@@ -1553,6 +3796,7 @@ class CompositeBaseRuleGenerator(DuckDBCheckGenerator):
             )
 
         children = []
+        child_rule_ids = []  # Store child rule IDs for later reference
         for i, child_req in enumerate(items):
             if not isinstance(child_req, dict) or "CheckFunction" not in child_req:
                 raise InvalidRuleException(
@@ -1563,15 +3807,30 @@ class CompositeBaseRuleGenerator(DuckDBCheckGenerator):
             child_check = self.child_builder(child_req, child_bc)
             children.append(child_check)
 
+            # Extract child rule ID for reference
+            if child_req.get("CheckFunction") == "CheckModelRule":
+                child_rule_id = child_req.get("ModelRuleId")
+                if child_rule_id:
+                    child_rule_ids.append(child_rule_id)
+            # For other check functions, we might not have a clear rule ID
+            # In that case, we'll use the breadcrumb or a generated ID
+
+        # Store child rule IDs in the generator for later transfer to check object
+        self._child_rule_ids = child_rule_ids
+
         # --- identify upstream failed deps (excluding Items) ------------------------
         # 1) collect failed parent rule_ids from immediate parents
         failed_parent_rule_ids = set()
+        skipped_parent_rule_ids = set()
         if self.plan:
             for pidx, pres in self.parent_results_by_idx.items():
                 if not pres.get("ok", True):
                     failed_parent_rule_ids.add(self.plan.nodes[pidx].rule_id)
+                # Track skipped parents too
+                if pres.get("details", {}).get("skipped", False):
+                    skipped_parent_rule_ids.add(self.plan.nodes[pidx].rule_id)
 
-            # ENHANCED: Also check ALL previously executed rules for failures
+            # ENHANCED: Also check ALL previously executed rules for failures and skips
             # This ensures that indirect dependencies (like column presence checks)
             # properly propagate failures to dependent composite rules
             converter = None
@@ -1591,6 +3850,12 @@ class CompositeBaseRuleGenerator(DuckDBCheckGenerator):
                     if not result.get("ok", True):
                         if node_idx < len(self.plan.nodes):
                             failed_parent_rule_ids.add(
+                                self.plan.nodes[node_idx].rule_id
+                            )
+                    # Track skipped rules
+                    if result.get("details", {}).get("skipped", False):
+                        if node_idx < len(self.plan.nodes):
+                            skipped_parent_rule_ids.add(
                                 self.plan.nodes[node_idx].rule_id
                             )
 
@@ -1616,8 +3881,9 @@ class CompositeBaseRuleGenerator(DuckDBCheckGenerator):
                     if conf_rule_id:
                         model_rule_refs.add(conf_rule_id)
 
-        # 4) Check if any CheckModelRule references have failed
+        # 4) Check if any CheckModelRule references have failed or been skipped
         failed_conformance_refs = []
+        skipped_conformance_refs = []
         if model_rule_refs and self.plan:
             converter = None
             if (
@@ -1636,7 +3902,12 @@ class CompositeBaseRuleGenerator(DuckDBCheckGenerator):
                         rule_id = self.plan.nodes[node_idx].rule_id
                         if rule_id in model_rule_refs:
                             is_ok = result.get("ok", True)
-                            if not is_ok:
+                            is_skipped = result.get("details", {}).get("skipped", False)
+
+                            if is_skipped:
+                                # If dependency was skipped, mark this composite as skipped too
+                                skipped_conformance_refs.append(rule_id)
+                            elif not is_ok:
                                 # Check if the failed conformance rule is a Dataset entity type
                                 failed_rule_entity_type = getattr(
                                     self.plan.nodes[node_idx].rule, "entity_type", None
@@ -1718,6 +3989,47 @@ class CompositeBaseRuleGenerator(DuckDBCheckGenerator):
             if failed_rule_entity_type != "Dataset":
                 external_failed.append(failed_rule_id)
 
+        # Check for skipped dependencies (scenario 2: column absent when criteria not met)
+        # If a dependency was skipped, all dependent rules should also be skipped
+        all_deps_skipped = []
+        if self.plan and deps:
+            converter = None
+            if (
+                callable(self.child_builder)
+                and hasattr(self.child_builder, "__closure__")
+                and self.child_builder.__closure__
+            ):
+                for cell in self.child_builder.__closure__:
+                    if hasattr(cell.cell_contents, "_global_results_by_idx"):
+                        converter = cell.cell_contents
+                        break
+
+            if converter and hasattr(converter, "_global_results_by_idx"):
+                for dep_rule_id in deps:
+                    for node_idx, result in converter._global_results_by_idx.items():
+                        if node_idx < len(self.plan.nodes):
+                            if self.plan.nodes[node_idx].rule_id == dep_rule_id:
+                                # If dependency was skipped, this composite should also be skipped
+                                if result.get("details", {}).get("skipped", False):
+                                    all_deps_skipped.append(dep_rule_id)
+                                break
+
+        external_skipped_candidates = sorted(set(deps) & skipped_parent_rule_ids)
+        all_skipped = sorted(
+            set(external_skipped_candidates)
+            | set(skipped_conformance_refs)
+            | set(all_deps_skipped)
+        )
+
+        # If any dependency was skipped, mark this composite to be skipped
+        if all_skipped:
+            self.force_skip_due_to_upstream = {
+                "skipped_dependencies": all_skipped,
+                "reason": "upstream dependency was skipped",
+            }
+            skip_reason = f"Rule skipped - dependent rule(s) were skipped: {', '.join(all_skipped)}"
+            self.errorMessage = skip_reason
+
         # 8) Add failed conformance rule references and same-column failures to external failures
         # Only apply dependency propagation to Attribute and Column entity types, not Dataset
         if rule_entity_type in ["Attribute", "Column"]:
@@ -1763,6 +4075,26 @@ class CompositeBaseRuleGenerator(DuckDBCheckGenerator):
         self.nestedCheckHandler = (
             self.HANDLER.__func__ if hasattr(self.HANDLER, "__func__") else self.HANDLER
         )
+
+        # Store dependencies for runtime checking
+        # This is crucial for detecting skipped dependencies at execution time
+        self._dependencies = []
+
+        if deps:
+            # Convert dependency rule IDs to check objects by finding them in the plan
+            if self.plan:
+                for dep_id in deps:
+                    # Find the node with this rule_id in the plan
+                    for node in self.plan.nodes:
+                        if node.rule_id == dep_id:
+                            # Store a reference to the rule with its idx
+                            dep_ref = DependencyRef(
+                                rule_id=dep_id,
+                                rule_global_idx=node.idx,
+                                referenced_rule_id=dep_id,
+                            )
+                            self._dependencies.append(dep_ref)
+                            break
 
         # Don't set a static errorMessage for composites - let runtime logic provide detailed failure info
         # Only set errorMessage if explicitly provided in the rule specification
@@ -1866,8 +4198,9 @@ class CompositeORRuleGenerator(CompositeBaseRuleGenerator):
                 child_oks = []
                 child_details = []
                 total_rows = None
+                composite_rule_id = getattr(check, "rule_id", None)
 
-                for child in original_nested_checks:
+                for i, child in enumerate(original_nested_checks):
                     ok_i, det_i = converter.run_check(child)
                     violations = det_i.get("violations", 1)
 
@@ -1884,49 +4217,45 @@ class CompositeORRuleGenerator(CompositeBaseRuleGenerator):
                         except Exception:
                             total_rows = 1  # Fallback
 
+                    # Debug logging for ServiceCategory
+                    child_check_type = getattr(child, "checkType", None) or getattr(
+                        child, "check_type", None
+                    )
+
                     # OR semantics: child passes if it has fewer violations than total rows
                     # (meaning at least one row matched the condition)
                     or_child_ok = violations < total_rows
+
                     child_oks.append(or_child_ok)
 
                     # Update the details to reflect OR semantics
+                    det_i["ok"] = or_child_ok  # Update ok status to match OR semantics
                     det_i["violations"] = 0 if or_child_ok else 1
                     det_i["or_adjusted"] = True  # Mark that we adjusted this
-                    child_details.append(
-                        {"rule_id": getattr(child, "rule_id", None), **det_i}
-                    )
 
-                # OR passes if ANY child passes
-                overall_ok = any(child_oks)
-
-                # Collect information about failed rule IDs for detailed error message
-                failed_rule_ids = []
-                passed_rule_ids = []
-                for i, (child, child_ok) in enumerate(
-                    zip(original_nested_checks, child_oks)
-                ):
+                    # Generate unique child ID
                     child_rule_id = getattr(child, "rule_id", None)
                     child_check_type = getattr(child, "checkType", None) or getattr(
                         child, "check_type", None
                     )
 
-                    # For CheckModelRule references, try to get the actual ModelRuleId
-                    referenced_rule_id = getattr(child, "referenced_rule_id", None)
-
-                    # Build meaningful description for each child
-                    if referenced_rule_id:
-                        child_desc = referenced_rule_id
-                    elif (
-                        child_check_type
-                        and child_rule_id
-                        and child_check_type != child_rule_id
-                    ):
-                        child_desc = f"{child_check_type}#{i + 1}"
-                    elif child_rule_id:
-                        child_desc = f"{child_rule_id}#{i + 1}"
+                    if child_rule_id and child_rule_id != composite_rule_id:
+                        unique_child_id = child_rule_id
+                    elif child_check_type:
+                        unique_child_id = f"{child_check_type}#{i + 1}"
                     else:
-                        child_desc = f"child#{i + 1}"
+                        unique_child_id = f"child#{i + 1}"
 
+                    child_details.append({**det_i, "rule_id": unique_child_id})
+
+                # OR passes if ANY child passes
+                overall_ok = any(child_oks)
+
+                # Collect information about failed rule IDs from child_details
+                failed_rule_ids = []
+                passed_rule_ids = []
+                for child_detail, child_ok in zip(child_details, child_oks):
+                    child_desc = child_detail.get("rule_id", "<child>")
                     if child_ok:
                         passed_rule_ids.append(child_desc)
                     else:
@@ -2095,6 +4424,62 @@ class FocusToDuckDBSchemaConverter:
             "generator": ColumnByColumnEqualsColumnValueGenerator,
             "factory": lambda args: "ColumnAName",
         },
+        "JSONCheckPathType": {
+            "generator": JSONCheckPathTypeGenerator,
+            "factory": lambda args: "ColumnName",
+        },
+        "JSONCheckPathKeyValueFormat": {
+            "generator": JSONCheckPathKeyValueFormatGenerator,
+            "factory": lambda args: "ColumnName",
+        },
+        "JSONCheckPathKeyStartsWith": {
+            "generator": JSONCheckPathKeyStartsWithGenerator,
+            "factory": lambda args: "ColumnName",
+        },
+        "JSONCheckPathKeyExists": {
+            "generator": JSONCheckPathKeyExistsGenerator,
+            "factory": lambda args: "ColumnName",
+        },
+        "JSONCheckPathValue": {
+            "generator": JSONCheckPathValueGenerator,
+            "factory": lambda args: "ColumnName",
+        },
+        "JSONCheckPathNotValue": {
+            "generator": JSONCheckPathNotValueGenerator,
+            "factory": lambda args: "ColumnName",
+        },
+        "JSONCheckPathSameValue": {
+            "generator": JSONCheckPathSameValueGenerator,
+            "factory": lambda args: "ColumnAName",
+        },
+        "JSONCheckPathNumericFormat": {
+            "generator": JSONCheckPathNumericFormatGenerator,
+            "factory": lambda args: "ColumnName",
+        },
+        "JSONCheckPathUnitFormat": {
+            "generator": JSONCheckPathUnitFormatGenerator,
+            "factory": lambda args: "ColumnName",
+        },
+        "JSONCheckPathDistinctParent": {
+            "generator": JSONCheckPathDistinctParentGenerator,
+            "factory": lambda args: "ColumnName",
+        },
+        "FormatJSONFormat": {
+            "generator": FormatJSONFormatGenerator,
+            "factory": lambda args: "ColumnName",
+        },
+        "JSONFormatString": {
+            "generator": JSONFormatStringGenerator,
+            "factory": lambda args: "ColumnName",
+        },
+        "JSONFormatUnit": {
+            "generator": JSONFormatUnitGenerator,
+            "factory": lambda args: "ColumnName",
+        },
+        "JSONFormatNumeric": {
+            "generator": JSONFormatNumericGenerator,
+            "factory": lambda args: "ColumnName",
+        },
     }
 
     # Version-specific overrides: each version only defines what changes from previous versions
@@ -2227,6 +4612,12 @@ class FocusToDuckDBSchemaConverter:
         # Build the effective CHECK_GENERATORS mapping for this version
         self.CHECK_GENERATORS = self._build_check_generators_for_version(rules_version)
 
+        # Track missing generators for reporting
+        self.missing_generators: Set[str] = set()
+        self.missing_generator_rules: List[Tuple[str, str]] = (
+            []
+        )  # (rule_id, check_function)
+
         # Example caches (optional)
         self._prepared: Dict[str, Any] = {}
         self._views: Dict[str, str] = {}  # rule_id -> temp view name
@@ -2247,15 +4638,31 @@ class FocusToDuckDBSchemaConverter:
     ) -> bool:
         """Check if a rule should be included based on applicability criteria.
 
-        Performs hierarchical check:
-        1. Check this rule's applicability criteria
-        2. Check all parent dependencies up to the root
+        A rule is included if:
+        1. It has no applicability criteria (always included)
+        2. It has applicability criteria that match the provided criteria
+
+        Note: Rules with empty applicability criteria are ALWAYS included,
+        regardless of parent applicability. Parent applicability is only
+        checked for rules that themselves have applicability criteria.
         """
-        # First check this rule's own applicability criteria
+        # Check if rule has applicability criteria
+        rule_criteria = (
+            rule.applicability_criteria
+            if hasattr(rule, "applicability_criteria") and rule.applicability_criteria
+            else []
+        )
+
+        # If rule has no applicability criteria, always include it
+        # Do NOT check parent applicability for such rules
+        if not rule_criteria:
+            return True
+
+        # Rule has applicability criteria - check if it matches
         if not self._check_rule_applicability(rule):
             return False
 
-        # Then check all parent dependencies recursively
+        # For rules WITH applicability criteria, also check parent dependencies
         if parent_edges:
             for parent_rule in self._parent_rules_from_edges(parent_edges):
                 if parent_rule and not self._check_rule_applicability(parent_rule):
@@ -2359,7 +4766,38 @@ class FocusToDuckDBSchemaConverter:
     def finalize(
         self, *, success: bool, results_by_idx: Dict[int, Dict[str, Any]]
     ) -> None:
-        """Optional cleanup: drop temps, emit summaries, etc."""
+        """Optional cleanup: drop temps, emit summaries, report missing generators, etc."""
+        # Report missing generators if any were encountered
+        if self.missing_generators:
+            # Build the affected rules list
+            rules_list = "\n".join(
+                f"  - {rule_id}: {check_fn}"
+                for rule_id, check_fn in self.missing_generator_rules[:10]
+            )
+            if len(self.missing_generator_rules) > 10:
+                rules_list += (
+                    f"\n  ... and {len(self.missing_generator_rules) - 10} more"
+                )
+
+            missing_gens = ", ".join(sorted(self.missing_generators))
+
+            log.warning(
+                "\n"
+                + "=" * 80
+                + "\n"
+                + "VALIDATION INCOMPLETE: Missing Check Generators\n"
+                + "=" * 80
+                + "\n"
+                + "The following check functions are not implemented:\n"
+                + "  %s\n\n"
+                + "Affected rules (%d total):\n%s\n"
+                + "\nThese rules have been marked as SKIPPED in the report.\n"
+                + "=" * 80,
+                missing_gens,
+                len(self.missing_generator_rules),
+                rules_list,
+            )
+
         # e.g., self.conn.execute("DROP VIEW IF EXISTS ...")
         # Close DuckDB connection to prevent hanging in CI environments
         if hasattr(self, "conn") and self.conn is not None:
@@ -2396,10 +4834,10 @@ class FocusToDuckDBSchemaConverter:
         if rule.is_dynamic():
             return SkippedDynamicCheck(rule=rule, rule_id=rule_id)
 
-        # Check if rule should be skipped due to applicability criteria (including parent chain)
-        if not self._should_include_rule(rule, parent_edges):
-            return SkippedNonApplicableCheck(rule=rule, rule_id=rule_id)
+        if rule.is_optional():
+            return SkippedOptionalCheck(rule=rule, rule_id=rule_id)
 
+        # Build the actual check object
         requirement = self.__requirement_for_rule__(rule)
         check_obj = self.__generate_duckdb_check__(
             rule,
@@ -2409,12 +4847,17 @@ class FocusToDuckDBSchemaConverter:
             parent_results_by_idx=parent_results_by_idx,
             parent_edges=parent_edges,
         )
+
         return check_obj
 
     def run_check(self, check: Any) -> Tuple[bool, Dict[str, Any]]:  # noqa: C901
         """
         Execute a DuckDBColumnCheck (leaf or composite) or a SkippedCheck.
         Ensures details always include: violations:int, message:str.
+
+        NOTE: This method runs checks NORMALLY without any pre-filtering.
+        Post-processing (apply_result_overrides) handles non-applicable rules,
+        composite aggregation, and dependency skipping.
         """
 
         def _msg_for_outcome(
@@ -2466,13 +4909,26 @@ class FocusToDuckDBSchemaConverter:
         if (
             isinstance(check, SkippedCheck)
             or getattr(check, "checkType", "") == "skipped_check"
+            or getattr(check, "check_type", "") == "skipped_check"
         ):
-            ok, details = check.run(self.conn)
+            # For SkippedCheck generators, call their run() method
+            if isinstance(check, SkippedCheck):
+                ok, details = check.run(self.conn)
+            else:
+                # For DuckDBColumnCheck objects marked as skipped_check
+                ok = True
+                details = {
+                    "skipped": True,
+                    "reason": getattr(check, "errorMessage", None) or "Rule skipped",
+                    "violations": 0,
+                }
+
             details.setdefault("violations", 0)
             details.setdefault(
                 "message",
                 _msg_for(check, f"{getattr(check, 'rule_id', '<rule>')}: skipped"),
             )
+
             return ok, details
 
         # ---- composite (AND/OR) -------------------------------------------------
@@ -2481,6 +4937,7 @@ class FocusToDuckDBSchemaConverter:
 
         # Check for special executor on composite (e.g., custom OR logic)
         special = getattr(check, "special_executor", None)
+
         if callable(special):
             ok, details = special(self.conn)
             details.setdefault("violations", 0 if ok else 1)
@@ -2493,43 +4950,17 @@ class FocusToDuckDBSchemaConverter:
                 "check_type",
                 getattr(check, "checkType", None) or getattr(check, "check_type", None),
             )
+
             return ok, details
 
         if nested and handler:
-            # Upstream dependency short-circuit (tag set by composite generator)
-            upstream = getattr(check, "force_fail_due_to_upstream", None)
-            if upstream:
-                reason = upstream.get("reason", "upstream dependency failure")
-                failed_deps = upstream.get("failed_dependencies", [])
-                upstream_child_details: List[Dict[str, Any]] = []
-                for child in nested:
-                    upstream_child_details.append(
-                        {
-                            "rule_id": getattr(child, "rule_id", None),
-                            "ok": False,
-                            "violations": 1,
-                            "message": f"{getattr(child, 'rule_id', '<child>')}: {reason}",
-                            "reason": reason,
-                        }
-                    )
-                details = {
-                    "children": upstream_child_details,
-                    "aggregated": handler.__name__,
-                    "message": _msg_for(
-                        check, f"{getattr(check, 'rule_id', '<rule>')}: {reason}"
-                    ),
-                    "reason": reason,
-                    "failed_dependencies": failed_deps,
-                    "violations": 1,
-                    "check_type": getattr(check, "checkType", None)
-                    or getattr(check, "check_type", None),
-                }
-                return False, details
-
-            # Normal composite: run children and aggregate
+            # SIMPLE: Just run all children and aggregate their results
+            # Post-processing will handle skipping, non-applicable rules, etc.
             oks: List[bool] = []
-            normal_child_details: List[Dict[str, Any]] = []
-            for child in nested:
+            child_details: List[Dict[str, Any]] = []
+            composite_rule_id = getattr(check, "rule_id", None)
+
+            for i, child in enumerate(nested):
                 ok_i, det_i = self.run_check(child)
                 oks.append(ok_i)
                 det_i.setdefault("violations", 0 if ok_i else 1)
@@ -2539,46 +4970,59 @@ class FocusToDuckDBSchemaConverter:
                         child, f"{getattr(child, 'rule_id', '<child>')}: check failed"
                     ),
                 )
-                normal_child_details.append(
-                    {"rule_id": getattr(child, "rule_id", None), **det_i}
-                )
 
-            agg_ok = bool(handler(oks))
-
-            # Collect information about failed and passed children for detailed error messages
-            failed_child_ids = []
-            passed_child_ids = []
-            for i, (child, child_ok) in enumerate(zip(nested, oks)):
+                # Generate a unique identifier for each child
                 child_rule_id = getattr(child, "rule_id", None)
                 child_check_type = getattr(child, "checkType", None) or getattr(
                     child, "check_type", None
                 )
 
-                # For CheckModelRule references, try to get the actual ModelRuleId
-                referenced_rule_id = getattr(child, "referenced_rule_id", None)
-
-                # Build meaningful description for each child
-                if referenced_rule_id:
-                    child_desc = referenced_rule_id
-                elif (
-                    child_check_type
-                    and child_rule_id
-                    and child_check_type != child_rule_id
-                ):
-                    child_desc = f"{child_check_type}#{i + 1}"
-                elif child_rule_id:
-                    child_desc = f"{child_rule_id}#{i + 1}"
+                # For model_rule_reference checks, use the referenced rule ID
+                if child_check_type == "model_rule_reference":
+                    # Extract the referenced rule ID from the check object
+                    referenced_rule_id = getattr(child, "referenced_rule_id", None)
+                    if referenced_rule_id:
+                        unique_child_id = referenced_rule_id
+                    else:
+                        # Fallback to using the check's details if available
+                        unique_child_id = (
+                            det_i.get("referenced_rule_id")
+                            or f"model_rule_reference#{i + 1}"
+                        )
+                # Check if child has a unique rule_id (different from parent)
+                # If child's rule_id matches parent or is missing, create descriptive ID
+                elif child_rule_id and child_rule_id != composite_rule_id:
+                    # Child has its own unique rule_id
+                    unique_child_id = child_rule_id
+                elif child_check_type:
+                    # Use check type with index for children without unique IDs
+                    unique_child_id = f"{child_check_type}#{i + 1}"
                 else:
-                    child_desc = f"child#{i + 1}"
+                    # Fallback to generic child identifier
+                    unique_child_id = f"child#{i + 1}"
 
-                if child_ok:
-                    passed_child_ids.append(child_desc)
-                else:
-                    failed_child_ids.append(child_desc)
+                # Put rule_id AND ok AFTER the spread to ensure they override any existing values
+                child_detail_entry = {**det_i, "rule_id": unique_child_id, "ok": ok_i}
+                child_details.append(child_detail_entry)
 
-            # Build detailed message based on composite type and outcome
+            # Aggregate the children results normally
+            agg_ok = bool(handler(oks))
+
+            # Build descriptive message using the unique child IDs from child_details
             composite_rule_id = getattr(check, "rule_id", "<rule>")
             composite_type = handler.__name__ if handler else "composite"
+
+            # Use the unique IDs from child_details, not from check objects
+            failed_child_ids = [
+                child_detail["rule_id"]
+                for child_detail, ok_i in zip(child_details, oks)
+                if not ok_i
+            ]
+            passed_child_ids = [
+                child_detail["rule_id"]
+                for child_detail, ok_i in zip(child_details, oks)
+                if ok_i
+            ]
 
             if agg_ok:
                 if composite_type == "all":  # AND composite
@@ -2595,8 +5039,8 @@ class FocusToDuckDBSchemaConverter:
                 else:
                     fallback_message = f"{composite_rule_id}: {composite_type} failed - failed children: [{', '.join(failed_child_ids)}]"
 
-            normal_details = {
-                "children": normal_child_details,
+            details = {
+                "children": child_details,
                 "aggregated": handler.__name__,
                 "message": _msg_for_outcome(
                     check,
@@ -2610,7 +5054,7 @@ class FocusToDuckDBSchemaConverter:
                 "failed_child_ids": failed_child_ids,
                 "passed_child_ids": passed_child_ids,
             }
-            return agg_ok, normal_details
+            return agg_ok, details
 
         # ---- leaf ---------------------------------------------------------------
         # Special executor path (e.g., conformance rule reference)
@@ -2627,12 +5071,29 @@ class FocusToDuckDBSchemaConverter:
                 "check_type",
                 getattr(check, "checkType", None) or getattr(check, "check_type", None),
             )
+
             return ok, details
         # ---- leaf SQL execution ------------------------------------------------
         sql = getattr(check, "checkSql", None)
-        if not sql:
+        if not sql or sql == "None":
+            # Check if this should have been caught as a skipped check
+            check_type = getattr(check, "checkType", None) or getattr(
+                check, "check_type", None
+            )
+            rule_id = getattr(check, "rule_id", None)
+            error_msg = getattr(check, "errorMessage", None)
+
+            # If it looks like a skipped check but wasn't caught, handle it gracefully
+            if check_type == "skipped_check" or "skipped" in str(error_msg).lower():
+                return True, {
+                    "skipped": True,
+                    "reason": error_msg or "Rule skipped",
+                    "violations": 0,
+                    "message": error_msg or f"{rule_id}: skipped",
+                }
+
             raise InvalidRuleException(
-                f"Leaf check has no SQL to execute (rule_id={getattr(check, 'rule_id', None)})"
+                f"Leaf check has no SQL to execute (rule_id={rule_id}, check_type={check_type})"
             )
 
         # Handle SQLQuery objects with transpilation support
@@ -2814,15 +5275,30 @@ class FocusToDuckDBSchemaConverter:
 
         reg = self.CHECK_GENERATORS.get(check_fn)
         if not reg or "generator" not in reg:
-            raise InvalidRuleException(
-                textwrap.dedent(
-                    f"""
-                Rule {rule_id} @ {breadcrumb}: No generator registered for CheckFunction='{check_fn}'.
-                Available generators: {sorted(self.CHECK_GENERATORS.keys())}
-                Requirement:
-                {_compact_json(requirement)}
-                """
-                ).strip()
+            # Log warning and track missing generator instead of raising exception
+            self.missing_generators.add(check_fn)
+            self.missing_generator_rules.append((rule_id, check_fn))
+
+            log.warning(
+                "Missing generator for CheckFunction '%s' in rule '%s'. "
+                "Rule will be skipped. Available generators: %s",
+                check_fn,
+                rule_id,
+                sorted(self.CHECK_GENERATORS.keys()),
+            )
+
+            # Return a skipped check generator that will be marked appropriately
+            return SkippedMissingGeneratorCheck(
+                rule=rule,
+                rule_id=rule_id,
+                check_function=check_fn,
+                compile_condition=None,
+                child_builder=None,
+                breadcrumb=breadcrumb,
+                parent_results_by_idx=parent_results_by_idx or {},
+                parent_edges=parent_edges or (),
+                plan=getattr(self, "plan", None),
+                row_condition_sql=row_condition_sql,
             )
 
         gen_cls = reg["generator"]
@@ -2873,6 +5349,26 @@ class FocusToDuckDBSchemaConverter:
             raise InvalidRuleException(message)
 
         # Instantiate with *exactly* what was provided (plus defaults if your gen applies them)
+        # For composite rules (AND/OR), we need to extend parent_edges to include the composite itself
+        # so that children can inherit the composite's condition
+        is_composite = check_fn in ("AND", "OR")
+        child_parent_edges = parent_edges or ()
+
+        if is_composite:
+            # Find the node index for this composite rule in the plan so children can reference it
+            composite_node_idx = None
+            if self.plan:
+                for idx, node in enumerate(self.plan.nodes):
+                    if node.rule_id == rule_id:
+                        composite_node_idx = idx
+                        break
+
+            # Extend parent_edges to include this composite's rule_id
+            # The _parent_rules_from_edges method can handle rule_id strings directly
+            if composite_node_idx is not None:
+                # Add the composite's rule_id to parent_edges so children can find it
+                child_parent_edges = tuple(list(parent_edges or ()) + [rule_id])
+
         return gen_cls(
             rule=rule,
             rule_id=rule_id,
@@ -2888,7 +5384,8 @@ class FocusToDuckDBSchemaConverter:
                 child_req,
                 breadcrumb=child_bc,
                 parent_results_by_idx=parent_results_by_idx or {},
-                parent_edges=parent_edges or (),
+                parent_edges=child_parent_edges,
+                inherited_condition=row_condition_sql if is_composite else None,
             ),
             breadcrumb=breadcrumb,
             **params,
@@ -2902,17 +5399,72 @@ class FocusToDuckDBSchemaConverter:
         breadcrumb: str,
         parent_results_by_idx,
         parent_edges,
+        inherited_condition: Optional[str] = None,
     ) -> Union["DuckDBColumnCheck", SkippedCheck]:
         """
         Build a DuckDBColumnCheck for this requirement.
         For composites (AND/OR), the Composite* generators will recursively call back here
         to build child checks and set `nestedChecks` + `nestedCheckHandler`.
+
+        Args:
+            inherited_condition: Condition inherited from parent composite (for inline children)
         """
         if not isinstance(requirement, dict):
             raise InvalidRuleException(
                 f"{rule_id} @ {breadcrumb}: expected requirement dict, got {type(requirement).__name__}"
             )
+
+        # Build effective condition from parent_edges AND from downstream composite consumers
         eff_cond = self._build_effective_condition(rule, parent_edges)
+
+        # If this is an inline child of a composite, inherit the composite's effective condition
+        if inherited_condition:
+            if eff_cond:
+                eff_cond = f"({eff_cond}) AND ({inherited_condition})"
+            else:
+                eff_cond = inherited_condition
+
+        # ENHANCEMENT: Also check if this rule is referenced by composite rules with conditions
+        # This handles the case where a rule like PricingQuantity-C-008-M is referenced by
+        # a composite like PricingQuantity-C-007-C that has a condition.
+        if self.plan and hasattr(self.plan, "plan_graph"):
+            graph = self.plan.plan_graph
+            # Find composite rules that reference this rule
+            downstream_composites = graph.children.get(rule_id, set())
+
+            for composite_rid in downstream_composites:
+                # Get the composite rule object
+                composite_node = graph.nodes.get(composite_rid)
+
+                if composite_node and composite_node.rule:
+                    composite_rule = composite_node.rule
+                    composite_function = getattr(composite_rule, "function", None)
+
+                    # Check if it's a composite with a condition
+                    if composite_function == "Composite":
+                        composite_cond_spec = self._extract_condition_spec(
+                            composite_rule
+                        )
+
+                        if composite_cond_spec:
+                            composite_cond_sql = (
+                                self._compile_condition_with_generators(
+                                    composite_cond_spec,
+                                    rule=composite_rule,
+                                    rule_id=composite_rid,
+                                    breadcrumb=f"{composite_rid}_condition",
+                                )
+                            )
+
+                            if composite_cond_sql:
+                                # Combine with existing condition
+                                if eff_cond:
+                                    eff_cond = (
+                                        f"({eff_cond}) AND ({composite_cond_sql})"
+                                    )
+                                else:
+                                    eff_cond = composite_cond_sql
+
         gen = self.__make_generator__(
             rule,
             rule_id,
@@ -3174,13 +5726,16 @@ class FocusToDuckDBSchemaConverter:
     def _build_effective_condition(self, rule, parent_edges) -> str | None:
         parts = []
 
+        # Get the rule_id for potential debugging
+        current_rule_id = (
+            getattr(rule, "rule_id", None) or getattr(rule, "RuleId", None) or "<rule>"
+        )
+
         me = self._extract_condition_spec(rule)
         me_sql = self._compile_condition_with_generators(
             me,
             rule=rule,
-            rule_id=getattr(rule, "rule_id", None)
-            or getattr(rule, "RuleId", None)
-            or "<rule>",
+            rule_id=current_rule_id,
             breadcrumb="Condition",
         )
         if me_sql:
@@ -3189,15 +5744,20 @@ class FocusToDuckDBSchemaConverter:
         for prule in self._parent_rules_from_edges(parent_edges):
             if prule is None:
                 continue
+            parent_rule_id = (
+                getattr(prule, "rule_id", None)
+                or getattr(prule, "RuleId", None)
+                or "<parent>"
+            )
+
             pspec = self._extract_condition_spec(prule)
             psql = self._compile_condition_with_generators(
                 pspec,
                 rule=prule,
-                rule_id=getattr(prule, "rule_id", None)
-                or getattr(prule, "RuleId", None)
-                or "<parent>",
+                rule_id=parent_rule_id,
                 breadcrumb="ParentCondition",
             )
+
             if psql:
                 parts.append(f"({psql})")
 
@@ -3444,6 +6004,694 @@ class FocusToDuckDBSchemaConverter:
                 print(f"Reference to: {info.get('referenced')}")
             elif t == "skipped":
                 print(f"Skipped: {info.get('reason')}")
+
+    def apply_result_overrides(self, results_by_idx: Dict[int, Dict[str, Any]]) -> None:
+        """
+        POST-PROCESSING: Apply all result overrides after checks have run.
+
+        This is the single location where we handle:
+        1. Non-applicable rules: Skip rules that don't meet applicability criteria
+        2. Composite aggregation: Update composites based on child results
+        3. Dependency skips: Skip rules whose dependencies failed/skipped
+
+        This runs AFTER all checks have executed normally, making the logic
+        simple, clear, and maintainable.
+        """
+        if not self.plan:
+            return
+
+        # Phase 1: Mark non-applicable rules and their descendants as skipped
+        non_applicable_rule_ids = self._apply_non_applicable_skips(results_by_idx)
+
+        # Phase 2: Propagate skipped dependencies BEFORE composite aggregation
+        # This ensures composites see correct child skip states
+        self._apply_dependency_skips(results_by_idx)
+
+        # Phase 3: Update composite results based on child results
+        # This must run AFTER dependency skips so it sees the final child states
+        self._apply_composite_aggregation(results_by_idx)
+
+        # Phase 4: Apply non-applicable marking to nested children
+        # This must run AFTER composite aggregation so synced skip states are preserved
+        self._apply_nested_child_non_applicable_marking(
+            results_by_idx, non_applicable_rule_ids
+        )
+
+    def _apply_non_applicable_skips(
+        self, results_by_idx: Dict[int, Dict[str, Any]]
+    ) -> tuple[Set[str], Set[str]]:
+        """Mark non-applicable rules and all their descendants as skipped.
+
+        This handles both separate plan nodes AND nested children within composites.
+        Also handles column-family rules: when a column presence check is non-applicable,
+        ALL rules for that column are marked non-applicable.
+
+        Returns:
+            Tuple of (non_applicable_nested_rule_ids, non_applicable_column_prefixes)
+            for use in Phase 4.
+        """
+        if not self.plan:
+            return (set(), set())
+
+        # Identify all non-applicable rules (both top-level nodes and nested children)
+        non_applicable_rules: Set[int] = set()
+        non_applicable_nested_rule_ids: Set[str] = set()
+        non_applicable_column_prefixes: Set[str] = set()
+
+        for idx, node in enumerate(self.plan.nodes):
+            if not node or not hasattr(node, "rule"):
+                continue
+
+            rule = node.rule
+            parent_edges = node.parent_edges if hasattr(node, "parent_edges") else ()
+
+            # Check if this rule should be included
+            if not self._should_include_rule(rule, parent_edges):
+                non_applicable_rules.add(idx)
+                rule_id = getattr(rule, "rule_id", None)
+                if rule_id:
+                    non_applicable_nested_rule_ids.add(rule_id)
+                    # Extract column prefix ONLY for Presence checks with EntityType="Dataset"
+                    # that reference a COLUMN (not dataset rules starting with CostAndUsage-D-)
+                    # This ensures all rules for a non-applicable column presence check are skipped
+                    rule_function = getattr(rule, "function", None)
+                    rule_entity_type = getattr(rule, "entity_type", None)
+                    if (
+                        rule_function == "Presence"
+                        and rule_entity_type == "Dataset"
+                        and "-" in rule_id
+                    ):
+                        # Dataset presence rules for columns are like "CostAndUsage-D-NNN-X"
+                        # We need to look at the "Reference" field to get the actual column name
+                        column_name = getattr(rule, "reference", None)
+                        if column_name and column_name != "CostAndUsage":
+                            non_applicable_column_prefixes.add(column_name)
+
+        # Collect all descendants of non-applicable rules
+        rules_to_skip = self._collect_all_descendants(non_applicable_rules)
+
+        # Also add all rules that share a column prefix with non-applicable rules
+        for idx, node in enumerate(self.plan.nodes):
+            if idx not in rules_to_skip:  # Don't re-process already marked rules
+                rule_id = (
+                    getattr(node.rule, "rule_id", None)
+                    if hasattr(node, "rule")
+                    else None
+                )
+                if rule_id and "-" in rule_id:
+                    column_prefix = rule_id.split("-")[0]
+                    if column_prefix in non_applicable_column_prefixes:
+                        rules_to_skip.add(idx)
+                        if rule_id:
+                            non_applicable_nested_rule_ids.add(rule_id)
+
+        # Mark them all as skipped
+        for idx in rules_to_skip:
+            if idx in results_by_idx:
+                result = results_by_idx[idx]
+                details = result.get("details", {})
+                rule_id = result.get("rule_id", "")
+
+                # Only update skip reason if not already skipped for another reason
+                # This preserves more specific skip reasons like "dynamic rule" or "optional rule"
+                if not details.get("skipped", False):
+                    # Update result to skipped
+                    result["ok"] = True
+                    details["skipped"] = True
+                    details["reason"] = "rule not applicable"
+                    details["message"] = (
+                        "Rule skipped - not applicable to current dataset or configuration"
+                    )
+                    details["violations"] = 0
+
+                # Mark nested children as skipped if composite
+                # This handles children that are part of the composite's nestedChecks
+                if "children" in details:
+                    for child in details["children"]:
+                        # Only update if not already skipped
+                        if not child.get("skipped", False):
+                            child["ok"] = True
+                            child["skipped"] = True
+                            child["reason"] = "rule not applicable"
+                            child["violations"] = 0
+                            child_rule_id = child.get("rule_id", "<child>")
+                            child["message"] = f"{child_rule_id}: rule not applicable"
+
+        # Return the sets for use in Phase 4
+        return (non_applicable_nested_rule_ids, non_applicable_column_prefixes)
+
+    def _apply_nested_child_non_applicable_marking(
+        self,
+        results_by_idx: Dict[int, Dict[str, Any]],
+        non_applicable_rule_ids: tuple[Set[str], Set[str]],
+    ) -> None:
+        """Mark nested children as non-applicable AFTER composite aggregation.
+
+        This phase runs after composite aggregation so that any skip states
+        synced from child execution results are preserved. Only marks children
+        as "not applicable" if they aren't already skipped for another reason
+        (like being dynamic).
+
+        Args:
+            results_by_idx: Results dictionary
+            non_applicable_rule_ids: Tuple of (rule_ids, column_prefixes) from Phase 1
+        """
+        # Unpack the sets from Phase 1
+        non_applicable_nested_rule_ids, non_applicable_column_prefixes = (
+            non_applicable_rule_ids
+        )
+
+        # Mark any nested children that are non-applicable
+        # These are children embedded in composites, not separate plan nodes
+        for idx in results_by_idx:
+            result = results_by_idx[idx]
+            details = result.get("details", {})
+
+            if "children" in details:
+                for child in details["children"]:
+                    child_rule_id = child.get("rule_id")
+                    if child_rule_id:
+                        # Check if child rule ID matches non-applicable rule
+                        if child_rule_id in non_applicable_nested_rule_ids:
+                            # Only update if not already skipped
+                            if not child.get("skipped", False):
+                                child["ok"] = True
+                                child["skipped"] = True
+                                child["reason"] = "rule not applicable"
+                                child["violations"] = 0
+                                child["message"] = (
+                                    f"{child_rule_id}: rule not applicable"
+                                )
+                        # Also check if child rule shares column prefix with non-applicable column
+                        elif "-" in child_rule_id:
+                            child_column_prefix = child_rule_id.split("-")[0]
+                            if child_column_prefix in non_applicable_column_prefixes:
+                                # Only update if not already skipped
+                                if not child.get("skipped", False):
+                                    child["ok"] = True
+                                    child["skipped"] = True
+                                    child["reason"] = "rule not applicable"
+                                    child["violations"] = 0
+                                    child["message"] = (
+                                        f"{child_rule_id}: rule not applicable"
+                                    )
+
+    def _apply_composite_aggregation(
+        self, results_by_idx: Dict[int, Dict[str, Any]]
+    ) -> None:
+        """Update composite results based on actual child results.
+
+        This must run AFTER dependency skips so it sees the final child states.
+        """
+        if not self.plan:
+            return
+
+        for idx, node in enumerate(self.plan.nodes):
+            if idx not in results_by_idx:
+                continue
+
+            result = results_by_idx[idx]
+            details = result.get("details", {})
+
+            # Only process composites with children
+            if "children" not in details or "aggregated" not in details:
+                continue
+
+            children = details["children"]
+            aggregator = details["aggregated"]
+
+            # IMPORTANT: Update children with their current states from results_by_idx
+            # The children array was populated during initial execution, but child rules
+            # may have been updated by earlier post-processing phases (non-applicable, dependencies)
+            # We need to sync the child states so aggregation sees the latest data
+            if self.plan and hasattr(node, "rule"):
+                rule = node.rule
+                # Get the dependencies list from the rule's validation criteria
+                dependencies = []
+                vc = getattr(rule, "validation_criteria", None)
+                if vc and hasattr(vc, "dependencies"):
+                    dependencies = list(vc.dependencies or [])
+                elif isinstance(vc, dict):
+                    dependencies = list(vc.get("dependencies") or [])
+
+                # Dependencies list often includes a Dataset presence check as the first entry
+                # (e.g., "CostAndUsage-D-010-M") which is NOT part of the composite's nested children
+                # Skip Dataset dependencies (those starting with "CostAndUsage-D-" or other dataset prefixes)
+                child_dependencies = [
+                    dep
+                    for dep in dependencies
+                    if not dep.endswith("-D-") and "-D-" not in dep
+                ]
+
+                # Match children to their dependency rules - but only if lengths match
+                if child_dependencies and len(child_dependencies) == len(children):
+                    for i, dep_rule_id in enumerate(child_dependencies):
+                        child = children[i]
+
+                        # Find the result for this dependency rule
+                        for dep_idx, dep_node in enumerate(self.plan.nodes):
+                            if dep_idx in results_by_idx:
+                                dep_node_rule_id = (
+                                    getattr(dep_node.rule, "rule_id", None)
+                                    if hasattr(dep_node, "rule")
+                                    else None
+                                )
+
+                                if dep_node_rule_id == dep_rule_id:
+                                    # Found the node for this dependency - update child state
+                                    dep_result = results_by_idx[dep_idx]
+                                    dep_details = dep_result.get("details", {})
+
+                                    # Sync the key fields - prioritize skipped status from details
+                                    child["ok"] = dep_result.get("ok", False)
+                                    # Check both top-level and details for skipped status
+                                    child["skipped"] = dep_details.get(
+                                        "skipped", False
+                                    ) or dep_result.get("skipped", False)
+                                    child["violations"] = dep_details.get(
+                                        "violations", 0
+                                    )
+                                    if "reason" in dep_details:
+                                        child["reason"] = dep_details["reason"]
+                                    # Also check for message to carry forward
+                                    if "message" in dep_details:
+                                        child["message"] = dep_details["message"]
+
+                                    break
+                else:
+                    # If we can't match by dependencies, try to match by rule_id directly
+                    for child in children:
+                        child_rule_id = child.get("rule_id")
+                        if child_rule_id:
+                            # Search for this rule_id in results_by_idx
+                            for dep_idx, dep_node in enumerate(self.plan.nodes):
+                                if dep_idx in results_by_idx:
+                                    dep_node_rule_id = (
+                                        getattr(dep_node.rule, "rule_id", None)
+                                        if hasattr(dep_node, "rule")
+                                        else None
+                                    )
+
+                                    if dep_node_rule_id == child_rule_id:
+                                        # Found the node - update child state
+                                        dep_result = results_by_idx[dep_idx]
+                                        dep_details = dep_result.get("details", {})
+
+                                        # Sync the key fields
+                                        child["ok"] = dep_result.get("ok", False)
+                                        child["skipped"] = dep_details.get(
+                                            "skipped", False
+                                        ) or dep_result.get("skipped", False)
+                                        child["violations"] = dep_details.get(
+                                            "violations", 0
+                                        )
+                                        if "reason" in dep_details:
+                                            child["reason"] = dep_details["reason"]
+                                        if "message" in dep_details:
+                                            child["message"] = dep_details["message"]
+                                        break
+
+            # Check if ALL children were skipped
+            all_children_skipped = children and all(
+                child.get("skipped", False) for child in children
+            )
+
+            if all_children_skipped:
+                # If ALL children skipped, mark composite as skipped too
+                result["ok"] = True
+                details["skipped"] = True
+                details["reason"] = "Rule skipped - all child rules were skipped"
+                details["message"] = "Rule skipped - all child rules were skipped"
+                details["violations"] = 0
+                continue
+
+            # Normal aggregation: only consider non-skipped children
+            # Skipped children should not affect the composite result
+            non_skipped_children = [
+                child for child in children if not child.get("skipped", False)
+            ]
+
+            # If there are no non-skipped children, this should have been caught above
+            # But as a safety check, if all were skipped, mark as skipped
+            if not non_skipped_children:
+                result["ok"] = True
+                details["skipped"] = True
+                details["reason"] = "Rule skipped - all child rules were skipped"
+                details["message"] = "Rule skipped - all child rules were skipped"
+                details["violations"] = 0
+                continue
+
+            # Aggregate only non-skipped children
+            child_oks = [child.get("ok", False) for child in non_skipped_children]
+
+            if aggregator == "all":
+                # AND: all non-skipped children must pass
+                composite_ok = all(child_oks)
+            elif aggregator == "any":
+                # OR: at least one non-skipped child must pass
+                composite_ok = any(child_oks)
+            else:
+                # Unknown aggregator, keep current result
+                continue
+
+            # Update composite result
+            result["ok"] = composite_ok
+
+            # For violations, use the actual violation count from children
+            # For OR composites, we want the violation count from the composite's own SQL execution
+            # which represents rows that don't match ANY of the allowed values
+            # The initial execution already set this correctly, so only update if we're changing pass/fail status
+            if "violations" in details:
+                # Keep the original violation count from execution
+                # Only force to 0 if composite is now passing
+                if composite_ok:
+                    details["violations"] = 0
+                # If failing, keep the original violation count from the composite's SQL execution
+            else:
+                # Fallback if violations wasn't set (shouldn't happen)
+                details["violations"] = 0 if composite_ok else 1
+
+            # Build descriptive message using CHILD DETAILS not rule IDs from check objects
+            rule_id = result.get("rule_id", "<composite>")
+
+            # Collect child rule IDs from non-skipped children only
+            failed_children = []
+            passed_children = []
+            skipped_children = []
+
+            for child in children:
+                child_rule_id = child.get("rule_id", "<child>")
+                child_skipped = child.get("skipped", False)
+                child_ok = child.get("ok", False)
+
+                if child_skipped:
+                    skipped_children.append(child_rule_id)
+                elif child_ok:
+                    passed_children.append(child_rule_id)
+                else:
+                    failed_children.append(child_rule_id)
+
+            if composite_ok:
+                if aggregator == "all":
+                    details["message"] = (
+                        f"{rule_id}: AND passed - all child rules succeeded: "
+                        f"[{', '.join(passed_children)}]"
+                    )
+                else:  # any
+                    details["message"] = (
+                        f"{rule_id}: OR passed - satisfied by rules: "
+                        f"[{', '.join(passed_children)}]"
+                    )
+            else:
+                if aggregator == "all":
+                    details["message"] = (
+                        f"{rule_id}: AND failed - failed child rules: "
+                        f"[{', '.join(failed_children)}]"
+                    )
+                else:  # any
+                    details["message"] = (
+                        f"{rule_id}: OR failed - all child rules failed: "
+                        f"[{', '.join(failed_children)}]"
+                    )
+
+    def _apply_dependency_skips(
+        self, results_by_idx: Dict[int, Dict[str, Any]]
+    ) -> None:
+        """Skip rules whose dependencies were skipped or failed.
+
+        Also handles retroactive skipping: when a composite is skipped due to failed
+        dependencies, its child rules (referenced via CheckModelRule) are also marked
+        as skipped in results_by_idx so they appear correctly in the final output.
+        """
+        if not self.plan:
+            return
+
+        # Build dependency map
+        for idx, node in enumerate(self.plan.nodes):
+            if idx not in results_by_idx:
+                continue
+
+            result = results_by_idx[idx]
+            details = result.get("details", {})
+
+            # Check if this rule has dependencies
+            parent_idxs = node.parent_idxs if hasattr(node, "parent_idxs") else []
+
+            rule_id = result.get("rule_id", "")
+
+            # Check if any parent was skipped or failed (for column presence checks)
+            skipped_parents = []
+            failed_presence_checks = []
+
+            for parent_idx in parent_idxs:
+                if parent_idx in results_by_idx:
+                    parent_result = results_by_idx[parent_idx]
+                    parent_details = parent_result.get("details", {})
+                    parent_node = self.plan.nodes[parent_idx]
+                    parent_rule = (
+                        parent_node.rule if hasattr(parent_node, "rule") else None
+                    )
+                    parent_rule_id = parent_result.get("rule_id", f"idx_{parent_idx}")
+
+                    # Skip if parent was skipped
+                    if parent_details.get("skipped", False):
+                        skipped_parents.append(parent_rule_id)
+
+                    # Also skip if parent is a column presence check that failed
+                    # Column presence checks are critical dependencies - if they fail, dependent rules can't run
+                    elif not parent_result.get("ok", True):
+                        # Check if this is a column presence check
+                        parent_function = (
+                            getattr(parent_rule, "function", None)
+                            if parent_rule
+                            else None
+                        )
+                        parent_check_type = parent_details.get("check_type")
+
+                        if (
+                            parent_function == "Presence"
+                            or parent_check_type == "column_presence"
+                        ):
+                            failed_presence_checks.append(parent_rule_id)
+
+            rule_function = (
+                getattr(node.rule, "function", None) if hasattr(node, "rule") else None
+            )
+            is_composite = rule_function == "Composite"
+
+            # For composite rules, check if ALL children are skipped before skipping the composite
+            # A composite with some passing and some skipped children should aggregate normally
+            if is_composite and skipped_parents:
+                # Check if ALL children in the composite are skipped
+                all_children_skipped = True
+                if "children" in details:
+                    for child in details["children"]:
+                        if not child.get("skipped", False):
+                            all_children_skipped = False
+                            break
+
+                # Only skip the composite if all children are skipped
+                if all_children_skipped:
+                    result["ok"] = True
+                    details["skipped"] = True
+                    details["reason"] = "upstream dependency was skipped"
+                    details["message"] = (
+                        f"Rule skipped - dependent rule(s) were skipped: "
+                        f"{', '.join(skipped_parents)}"
+                    )
+                    details["violations"] = 0
+                    details["skipped_dependencies"] = skipped_parents
+                else:
+                    # Some children passed, so don't skip the composite
+                    # Just continue with normal processing
+                    pass
+            # For non-composite rules, skip if parent was skipped
+            elif skipped_parents:
+                # Skip this rule because an upstream dependency was skipped
+                result["ok"] = True
+                details["skipped"] = True
+                details["reason"] = "upstream dependency was skipped"
+                details["message"] = (
+                    f"Rule skipped - dependent rule(s) were skipped: "
+                    f"{', '.join(skipped_parents)}"
+                )
+                details["violations"] = 0
+                details["skipped_dependencies"] = skipped_parents
+
+            # If the rule has failed presence checks, annotate the failure message
+            # (but don't skip - let it fail with context)
+            elif failed_presence_checks and not result.get("ok", True):
+                current_message = details.get("message", "")
+                dependency_context = f" [Upstream dependency failed: {', '.join(failed_presence_checks)} - required column not present]"
+
+                if current_message:
+                    details["message"] = current_message + dependency_context
+                else:
+                    details["message"] = f"Rule execution failed{dependency_context}"
+
+                # For composite rules, also annotate their children
+                if is_composite and "children" in details:
+                    for child in details["children"]:
+                        child_rule_id = child.get("rule_id")
+                        if child_rule_id:
+                            # Find this child rule in results_by_idx and annotate it
+                            for child_idx, child_node in enumerate(self.plan.nodes):
+                                if child_idx in results_by_idx:
+                                    child_node_rule_id = (
+                                        getattr(child_node.rule, "rule_id", None)
+                                        if hasattr(child_node, "rule")
+                                        else None
+                                    )
+                                    if child_node_rule_id == child_rule_id:
+                                        child_result = results_by_idx[child_idx]
+                                        child_details = child_result.get("details", {})
+
+                                        # Only annotate if child also failed
+                                        if not child_result.get("ok", True):
+                                            child_current_message = child_details.get(
+                                                "message", ""
+                                            )
+                                            child_context = f" [Upstream dependency failed: {', '.join(failed_presence_checks)} - required column not present]"
+
+                                            if child_current_message:
+                                                child_details["message"] = (
+                                                    child_current_message
+                                                    + child_context
+                                                )
+                                            else:
+                                                child_details["message"] = (
+                                                    f"Rule execution failed{child_context}"
+                                                )
+                                        break
+
+        # Second pass: Find rules that failed but are children of composites with failed dependencies
+        # (Handle "grandparent" dependency failures where child -> composite -> failed dependency)
+        for idx, node in enumerate(self.plan.nodes):
+            if idx not in results_by_idx:
+                continue
+
+            result = results_by_idx[idx]
+            details = result.get("details", {})
+
+            # Only process rules that failed (not skipped, not passed)
+            if result.get("ok", True) or details.get("skipped", False):
+                continue
+
+            # Check if this rule's message already has upstream dependency context
+            current_message = details.get("message", "")
+            if "[Upstream dependency failed:" in current_message:
+                continue  # Already annotated
+
+            rule_id = result.get("rule_id", "")
+
+            # Find composites that reference this rule as a child
+            for comp_idx, comp_node in enumerate(self.plan.nodes):
+                if comp_idx not in results_by_idx:
+                    continue
+
+                comp_rule = comp_node.rule if hasattr(comp_node, "rule") else None
+                comp_function = (
+                    getattr(comp_rule, "function", None) if comp_rule else None
+                )
+
+                if comp_function != "Composite":
+                    continue
+
+                comp_details = results_by_idx[comp_idx].get("details", {})
+
+                # Check if this composite references our rule as a child
+                children = comp_details.get("children", [])
+                is_child_of_composite = any(
+                    c.get("rule_id") == rule_id for c in children
+                )
+
+                if not is_child_of_composite:
+                    continue
+
+                # Check if the composite has failed dependencies (grandparent failures)
+                comp_parent_idxs = (
+                    comp_node.parent_idxs if hasattr(comp_node, "parent_idxs") else []
+                )
+                grandparent_failed_presence = []
+
+                for gp_idx in comp_parent_idxs:
+                    if gp_idx not in results_by_idx:
+                        continue
+
+                    gp_result = results_by_idx[gp_idx]
+                    gp_details = gp_result.get("details", {})
+                    gp_node = self.plan.nodes[gp_idx]
+                    gp_rule = gp_node.rule if hasattr(gp_node, "rule") else None
+                    gp_rule_id = gp_result.get("rule_id", f"idx_{gp_idx}")
+
+                    # Check if grandparent failed
+                    if not gp_result.get("ok", True):
+                        gp_function = (
+                            getattr(gp_rule, "function", None) if gp_rule else None
+                        )
+                        gp_check_type = gp_details.get("check_type")
+
+                        # Skip if this is the same rule (avoid circular reference in message)
+                        if gp_rule_id == rule_id:
+                            continue
+
+                        # Include any failed dependency, but note if it's a column presence check
+                        if (
+                            gp_function == "Presence"
+                            or gp_check_type == "column_presence"
+                        ):
+                            grandparent_failed_presence.append(
+                                f"{gp_rule_id} (missing column)"
+                            )
+                        else:
+                            # For other failures (like composites), just include the rule ID
+                            grandparent_failed_presence.append(gp_rule_id)
+
+                # If we found failed dependencies in grandparents, annotate this rule
+                if grandparent_failed_presence:
+                    dependency_context = f" [Upstream dependency failed: {', '.join(grandparent_failed_presence)}]"
+
+                    if current_message:
+                        details["message"] = current_message + dependency_context
+                    else:
+                        details["message"] = (
+                            f"Rule execution failed{dependency_context}"
+                        )
+
+                    break  # Found the context, no need to check other composites
+
+    def _collect_all_descendants(self, rule_indices: Set[int]) -> Set[int]:
+        """Recursively collect all descendants of the given rules."""
+        if not self.plan:
+            return set()
+
+        descendants = set(rule_indices)
+        to_process = list(rule_indices)
+
+        while to_process:
+            current_idx = to_process.pop()
+
+            # Find all nodes that depend on this one
+            for idx, node in enumerate(self.plan.nodes):
+                if not hasattr(node, "parent_idxs"):
+                    continue
+
+                if current_idx in node.parent_idxs:
+                    if idx not in descendants:
+                        descendants.add(idx)
+                        to_process.append(idx)
+
+            # Also check nested children in composite checks
+            if current_idx < len(self.plan.nodes):
+                node = self.plan.nodes[current_idx]
+                if hasattr(node, "rule") and hasattr(node.rule, "validation_criteria"):
+                    vc = node.rule.validation_criteria
+                    if hasattr(vc, "requirement") and isinstance(vc.requirement, dict):
+                        # Items would be child requirements in composites
+                        # These are already handled as separate nodes with dependencies
+                        pass
+
+        return descendants
 
     def update_global_results(
         self, node_idx: int, ok: bool, details: Dict[str, Any]
